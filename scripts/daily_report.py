@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Ежедневный отчёт по проектам CurseForge: скачивания (из API) + доход (из data/money.json).
-Запускается через GitHub Actions раз в день.
+Отчёт по проектам CurseForge: скачивания (парсинг публичной страницы) + доход (из data/money.json).
+Запускается через GitHub Actions каждый час.
+Публичный API-ключ не требуется.
 """
 import json
 import os
+import re
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -17,7 +19,16 @@ HISTORY_FILE = DATA_DIR / "history.json"
 MONEY_FILE = DATA_DIR / "money.json"
 CONFIG_FILE = ROOT / "config.json"
 
-CURSEFORGE_API = "https://api.curseforge.com/v1/mods/{mod_id}"
+CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 def load_json(path: Path, default):
@@ -34,25 +45,36 @@ def save_json(path: Path, data):
 
 def get_config():
     cfg = load_json(CONFIG_FILE, {})
-    # project_ids можно задать в config.json или через переменную окружения CURSEFORGE_PROJECT_IDS (через запятую)
-    env_ids = os.environ.get("CURSEFORGE_PROJECT_IDS", "")
-    if env_ids:
-        cfg["projects"] = [
-            {"id": int(pid.strip()), "name": f"Project {pid.strip()}"}
-            for pid in env_ids.split(",") if pid.strip()
-        ]
     return cfg
 
 
-def fetch_download_count(mod_id: int, api_key: str) -> dict:
-    headers = {"Accept": "application/json", "x-api-key": api_key}
-    resp = requests.get(CURSEFORGE_API.format(mod_id=mod_id), headers=headers, timeout=20)
+def fetch_download_count(slug: str) -> dict:
+    """Парсит публичную страницу мода на CurseForge — без API-ключа."""
+    url = CURSEFORGE_MOD_URL.format(slug=slug)
+    resp = requests.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
-    payload = resp.json()["data"]
-    return {
-        "name": payload.get("name", f"Project {mod_id}"),
-        "downloadCount": int(payload.get("downloadCount", 0)),
-    }
+    html = resp.text
+
+    # Число скачиваний в JSON-LD или в атрибутах страницы
+    # Вариант 1: ищем interactionStatistic в JSON-LD
+    ld_match = re.search(
+        r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S
+    )
+    if ld_match:
+        count = int(ld_match.group(1))
+    else:
+        # Вариант 2: ищем "X Downloads" в тексте страницы
+        dl_match = re.search(r'([\d,]+)\s+Downloads', html)
+        if dl_match:
+            count = int(dl_match.group(1).replace(",", ""))
+        else:
+            raise ValueError(f"Не удалось найти число скачиваний на странице: {url}")
+
+    # Название мода
+    title_match = re.search(r'<title>([^<]+)</title>', html)
+    name = title_match.group(1).split(" - ")[0].strip() if title_match else slug
+
+    return {"name": name, "downloadCount": count}
 
 
 def send_telegram(token: str, chat_id: str, text: str):
@@ -66,59 +88,65 @@ def send_telegram(token: str, chat_id: str, text: str):
 
 
 def main():
-    api_key = os.environ["CURSEFORGE_API_KEY"]
     tg_token = os.environ["TELEGRAM_BOT_TOKEN"]
     tg_chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
     cfg = get_config()
     projects = cfg.get("projects", [])
     if not projects:
-        print("Нет проектов в config.json и в CURSEFORGE_PROJECT_IDS — нечего считать.")
+        print("Нет проектов в config.json — нечего считать.")
         sys.exit(1)
 
     history = load_json(HISTORY_FILE, {})
     money = load_json(MONEY_FILE, {})
 
-    today = date.today().isoformat()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    now_utc = datetime.now(timezone.utc)
+    # Ключ для hourly-истории: "2025-06-21T14:00"
+    hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
+    today = now_utc.date().isoformat()
 
-    today_entry = {}
-    lines = [f"<b>📊 Отчёт CurseForge — {today}</b>", ""]
+    # Предыдущая запись (любая) для вычисления дельты за час
+    sorted_keys = sorted(history.keys())
+    prev_key = sorted_keys[-1] if sorted_keys else None
 
-    total_today = 0
+    hour_entry = {}
+    lines = [f"<b>📊 CurseForge — {hour_key} UTC</b>", ""]
+
+    total_now = 0
     total_delta = 0
 
     for proj in projects:
-        mod_id = proj["id"]
+        slug = proj.get("slug") or proj.get("id")  # slug обязателен
+        display_name = proj.get("name", str(slug))
         try:
-            stats = fetch_download_count(mod_id, api_key)
+            stats = fetch_download_count(str(slug))
         except Exception as e:
-            lines.append(f"⚠️ {proj.get('name', mod_id)}: ошибка запроса ({e})")
+            lines.append(f"⚠️ {display_name}: ошибка ({e})")
             continue
 
         name = stats["name"]
         current = stats["downloadCount"]
-        prev = history.get(yesterday, {}).get(str(mod_id), {}).get("downloadCount")
+        prev = (history.get(prev_key) or {}).get(str(slug), {}).get("downloadCount")
         delta = current - prev if prev is not None else 0
 
-        today_entry[str(mod_id)] = {"name": name, "downloadCount": current}
-        total_today += current
+        hour_entry[str(slug)] = {"name": name, "downloadCount": current}
+        total_now += current
         total_delta += delta
 
         sign = "+" if delta >= 0 else ""
         lines.append(f"📦 <b>{name}</b>")
-        lines.append(f"   Всего скачиваний: {current}")
-        lines.append(f"   За сегодня: {sign}{delta}")
+        lines.append(f"   Всего скачиваний: {current:,}")
+        lines.append(f"   За час: {sign}{delta:,}")
         lines.append("")
 
-    history[today] = today_entry
+    history[hour_key] = hour_entry
     save_json(HISTORY_FILE, history)
 
-    lines.append(f"<b>Итого скачиваний (все проекты): {total_today}</b>")
+    lines.append(f"<b>Итого (все проекты): {total_now:,}</b>")
     sign_total = "+" if total_delta >= 0 else ""
-    lines.append(f"<b>Прирост за сегодня: {sign_total}{total_delta}</b>")
+    lines.append(f"<b>Прирост за час: {sign_total}{total_delta:,}</b>")
 
-    # Доход за сегодня (если записан вручную через workflow add_money.yml)
+    # Доход за сегодня
     today_money = money.get(today, [])
     if today_money:
         day_sum = sum(item["amount"] for item in today_money)
