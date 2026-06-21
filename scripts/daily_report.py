@@ -101,13 +101,14 @@ def main():
     now_utc = datetime.now(timezone.utc)
     # Ключ для hourly-истории: "2025-06-21T14:00"
     hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
+    hour_label = now_utc.strftime("%d.%m.%Y %H:00 UTC")
 
     # Предыдущая запись (любая) для вычисления дельты за час
     sorted_keys = sorted(history.keys())
     prev_key = sorted_keys[-1] if sorted_keys else None
 
     hour_entry = {}
-    lines = [f"<b>📊 CurseForge — {hour_key} UTC</b>", ""]
+    lines = [f"<b>📊 CurseForge — {hour_label}</b>", ""]
 
     total_now = 0
     total_delta = 0
