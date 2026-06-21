@@ -4,7 +4,6 @@
   ],
   "viral_multiplier": 4,
   "viral_min_absolute": 20,
-  "check_new_version": true,
   "send_png_chart": true,
   "png_chart_hours": 12,
   "top_records_count": 10

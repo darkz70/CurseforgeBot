@@ -16,12 +16,10 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 HISTORY_FILE = DATA_DIR / "history.json"
-VERSIONS_FILE = DATA_DIR / "versions.json"
 CONFIG_FILE = ROOT / "config.json"
 TMP_DIR = Path("/tmp")
 
 CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
-CFWIDGET_URL = "https://api.cfwidget.com/{slug}"
 
 HEADERS = {
     "User-Agent": (
@@ -74,39 +72,6 @@ def fetch_download_count(slug: str) -> dict:
     name = title_match.group(1).split(" - ")[0].strip() if title_match else slug
 
     return {"name": name, "downloadCount": count}
-
-
-def fetch_latest_file_version(slug: str) -> dict | None:
-    """
-    Лучшее-доступное определение последней версии файла мода.
-
-    ВАЖНО: страница /files на curseforge.com рендерится через JS, поэтому
-    надёжно распарсить версию из обычного HTML (как скачивания) не получится.
-    Используется бесплатный сторонний сервис cfwidget.com (без ключа),
-    который зеркалит список файлов проекта. Если cfwidget недоступен —
-    функция просто возвращает None, и уведомление о версии в этом часе
-    не отправляется (не критично, ошибка не прерывает остальной отчёт).
-    """
-    try:
-        resp = requests.get(CFWIDGET_URL.format(slug=slug), headers=HEADERS, timeout=20)
-        if resp.status_code == 202:
-            # cfwidget ещё индексирует проект впервые — данных пока нет
-            return None
-        resp.raise_for_status()
-        data = resp.json()
-        files = data.get("files") or []
-        if not files:
-            return None
-        latest = files[0]  # cfwidget отдаёт файлы от новых к старым
-        file_id = latest.get("id")
-        if file_id is None:
-            return None
-        return {
-            "file_id": str(file_id),
-            "file_name": latest.get("display") or latest.get("name") or str(file_id),
-        }
-    except Exception:
-        return None
 
 
 def send_telegram(token: str, chat_id: str, text: str):
@@ -397,13 +362,11 @@ def main():
     # Настройки новых фич (с дефолтами, можно переопределить в config.json)
     viral_multiplier = float(cfg.get("viral_multiplier", 4))
     viral_min_absolute = int(cfg.get("viral_min_absolute", 20))
-    check_new_version = bool(cfg.get("check_new_version", True))
     send_png_chart = bool(cfg.get("send_png_chart", True))
     png_chart_hours = int(cfg.get("png_chart_hours", 12))
     top_records_count = int(cfg.get("top_records_count", 10))
 
     history = load_json(HISTORY_FILE, {})
-    versions = load_json(VERSIONS_FILE, {})
 
     now_utc = datetime.now(timezone.utc)
     hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
@@ -542,17 +505,6 @@ def main():
 
             lines.append("")
 
-        # --- Уведомление о новой версии (независимо от антиспама по скачиваниям) ---
-        if check_new_version:
-            vinfo = fetch_latest_file_version(slug)
-            if vinfo and vinfo.get("file_id"):
-                old = versions.get(slug)
-                if old and old.get("file_id") != vinfo["file_id"]:
-                    alerts.append(
-                        f"🆕 <b>{name}</b>: вышла новая версия — {vinfo.get('file_name')}"
-                    )
-                versions[slug] = vinfo
-
         # --- Алерт по абсолютному порогу (как раньше) ---
         if delta_hour >= ALERT_THRESHOLD:
             alerts.append(f"🚨 <b>{name}</b>: +{delta_hour:,} скачиваний за час!")
@@ -564,7 +516,6 @@ def main():
                 png_charts.append((slug, name, chart_path))
 
     save_json(HISTORY_FILE, history)
-    save_json(VERSIONS_FILE, versions)
 
     lines.append(f"<b>Итого (все проекты): {total_now:,}</b>")
     sign_total = "+" if total_delta_hour >= 0 else ""
