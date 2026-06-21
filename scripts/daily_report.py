@@ -99,22 +99,41 @@ def main():
     history = load_json(HISTORY_FILE, {})
 
     now_utc = datetime.now(timezone.utc)
-    # Ключ для hourly-истории: "2025-06-21T14:00"
     hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
     hour_label = now_utc.strftime("%d.%m.%Y %H:00 UTC")
 
-    # Предыдущая запись (любая) для вычисления дельты за час
+    # Ключи для дельт
     sorted_keys = sorted(history.keys())
     prev_key = sorted_keys[-1] if sorted_keys else None
+
+    def find_closest_key(target_dt: datetime) -> str | None:
+        """Находит ближайший ключ в истории не позже target_dt."""
+        target_str = target_dt.strftime("%Y-%m-%dT%H:00")
+        candidates = [k for k in sorted_keys if k <= target_str]
+        return candidates[-1] if candidates else None
+
+    from datetime import timedelta
+    day_key   = find_closest_key(now_utc - timedelta(days=1))
+    week_key  = find_closest_key(now_utc - timedelta(weeks=1))
+    month_key = find_closest_key(now_utc - timedelta(days=30))
+
+    def fmt_delta(current: int, ref_key: str | None, slug: str) -> str:
+        if ref_key is None:
+            return "n/a"
+        ref = (history.get(ref_key) or {}).get(slug, {}).get("downloadCount")
+        if ref is None:
+            return "n/a"
+        d = current - ref
+        return f"+{d:,}" if d >= 0 else f"{d:,}"
 
     hour_entry = {}
     lines = [f"<b>📊 CurseForge — {hour_label}</b>", ""]
 
     total_now = 0
-    total_delta = 0
+    total_delta_hour = 0
 
     for proj in projects:
-        slug = proj.get("slug") or proj.get("id")  # slug обязателен
+        slug = proj.get("slug") or proj.get("id")
         display_name = proj.get("name", str(slug))
         try:
             stats = fetch_download_count(str(slug))
@@ -125,24 +144,27 @@ def main():
         name = stats["name"]
         current = stats["downloadCount"]
         prev = (history.get(prev_key) or {}).get(str(slug), {}).get("downloadCount")
-        delta = current - prev if prev is not None else 0
+        delta_hour = current - prev if prev is not None else 0
 
         hour_entry[str(slug)] = {"name": name, "downloadCount": current}
         total_now += current
-        total_delta += delta
+        total_delta_hour += delta_hour
 
-        sign = "+" if delta >= 0 else ""
+        sign = "+" if delta_hour >= 0 else ""
         lines.append(f"📦 <b>{name}</b>")
-        lines.append(f"   Всего скачиваний: {current:,}")
-        lines.append(f"   За час: {sign}{delta:,}")
+        lines.append(f"   Всего: {current:,}")
+        lines.append(f"   За час: {sign}{delta_hour:,}")
+        lines.append(f"   За день: {fmt_delta(current, day_key, str(slug))}")
+        lines.append(f"   За неделю: {fmt_delta(current, week_key, str(slug))}")
+        lines.append(f"   За месяц: {fmt_delta(current, month_key, str(slug))}")
         lines.append("")
 
     history[hour_key] = hour_entry
     save_json(HISTORY_FILE, history)
 
     lines.append(f"<b>Итого (все проекты): {total_now:,}</b>")
-    sign_total = "+" if total_delta >= 0 else ""
-    lines.append(f"<b>Прирост за час: {sign_total}{total_delta:,}</b>")
+    sign_total = "+" if total_delta_hour >= 0 else ""
+    lines.append(f"<b>Прирост за час: {sign_total}{total_delta_hour:,}</b>")
 
     send_telegram(tg_token, tg_chat_id, "\n".join(lines))
     print("Отчёт отправлен.")
