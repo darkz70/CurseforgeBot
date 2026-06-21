@@ -100,7 +100,7 @@ def main():
 
     now_utc = datetime.now(timezone.utc)
     hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
-    hour_label = now_utc.strftime("%d.%m.%Y %H:00 UTC")
+    hour_label = now_utc.strftime("%d.%m.%Y %H:%M UTC")
 
     # Варшавское время с минутами
     def warsaw_offset(dt):
@@ -150,7 +150,7 @@ def main():
         try:
             stats = fetch_download_count(str(slug))
         except Exception as e:
-            lines.append(f"⚠️ {display_name}: ошибка ({e})")
+            lines.append(f"⚠️ {display_name}: Ошибка ({e})")
             continue
 
         name = stats["name"]
@@ -174,7 +174,7 @@ def main():
     history[hour_key] = hour_entry
     save_json(HISTORY_FILE, history)
 
-    lines.append(f"<b>Итого (все проекты): {total_now:,}</b>")
+    lines.append(f"<b>Итого (Все Проекты): {total_now:,}</b>")
     sign_total = "+" if total_delta_hour >= 0 else ""
     lines.append(f"<b>Прирост за час: {sign_total}{total_delta_hour:,}</b>")
 
