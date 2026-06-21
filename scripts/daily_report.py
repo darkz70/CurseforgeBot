@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Отчёт по проектам CurseForge: скачивания (парсинг публичной страницы) + доход (из data/money.json).
+Отчёт по проектам CurseForge: скачивания (парсинг публичной страницы).
 Запускается через GitHub Actions каждый час.
 Публичный API-ключ не требуется.
 """
@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -16,7 +16,6 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 HISTORY_FILE = DATA_DIR / "history.json"
-MONEY_FILE = DATA_DIR / "money.json"
 CONFIG_FILE = ROOT / "config.json"
 
 CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
@@ -98,12 +97,10 @@ def main():
         sys.exit(1)
 
     history = load_json(HISTORY_FILE, {})
-    money = load_json(MONEY_FILE, {})
 
     now_utc = datetime.now(timezone.utc)
     # Ключ для hourly-истории: "2025-06-21T14:00"
     hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
-    today = now_utc.date().isoformat()
 
     # Предыдущая запись (любая) для вычисления дельты за час
     sorted_keys = sorted(history.keys())
@@ -145,22 +142,6 @@ def main():
     lines.append(f"<b>Итого (все проекты): {total_now:,}</b>")
     sign_total = "+" if total_delta >= 0 else ""
     lines.append(f"<b>Прирост за час: {sign_total}{total_delta:,}</b>")
-
-    # Доход за сегодня
-    today_money = money.get(today, [])
-    if today_money:
-        day_sum = sum(item["amount"] for item in today_money)
-        lines.append("")
-        lines.append(f"<b>💰 Доход за {today}: {day_sum:.2f}</b>")
-        for item in today_money:
-            note = f" — {item['note']}" if item.get("note") else ""
-            lines.append(f"   {item['amount']:.2f}{note}")
-    else:
-        lines.append("")
-        lines.append("💰 Доход за сегодня не записан (используйте workflow «Add money»).")
-
-    total_money = sum(item["amount"] for day in money.values() for item in day)
-    lines.append(f"💰 Доход всего: {total_money:.2f}")
 
     send_telegram(tg_token, tg_chat_id, "\n".join(lines))
     print("Отчёт отправлен.")
