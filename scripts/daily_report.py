@@ -521,24 +521,18 @@ def main():
     sign_total = "+" if total_delta_hour >= 0 else ""
     lines.append(f"<b>Прирост за час: {sign_total}{total_delta_hour:,}</b>")
 
-    send_telegram(tg_token, tg_chat_id, "\n".join(lines))
+    report_text = "\n".join(lines)
 
-    for slug, name, chart_path in png_charts:
+    # Telegram ограничивает подпись к фото 1024 символами. Если отчёт укладывается —
+    # шлём текст как подпись к первому графику (одно сообщение вместо двух).
+    # Если не укладывается (несколько проектов, длинный топ-10 и т.п.) — как раньше,
+    # отдельным текстовым сообщением, а графики — следом со своей короткой подписью.
+    CAPTION_LIMIT = 1024
+    combined_sent = False
+    if png_charts and len(report_text) <= CAPTION_LIMIT:
+        first_slug, first_name, first_chart_path = png_charts[0]
         try:
-            send_telegram_photo(
-                tg_token, tg_chat_id, chart_path,
-                caption=f"📈 {name} — последние {png_chart_hours} ч"
-            )
+            send_telegram_photo(tg_token, tg_chat_id, first_chart_path, caption=report_text)
+            combined_sent = True
         except Exception as e:
-            print(f"Не удалось отправить график для {name}: {e}")
-        finally:
-            chart_path.unlink(missing_ok=True)
-
-    for alert in alerts:
-        send_telegram(tg_token, tg_chat_id, alert)
-
-    print("Отчёт отправлен.")
-
-
-if __name__ == "__main__":
-    main()
+            print(f"
