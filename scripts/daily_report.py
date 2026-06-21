@@ -16,9 +16,12 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 HISTORY_FILE = DATA_DIR / "history.json"
+VERSIONS_FILE = DATA_DIR / "versions.json"
 CONFIG_FILE = ROOT / "config.json"
+TMP_DIR = Path("/tmp")
 
 CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
+CFWIDGET_URL = "https://api.cfwidget.com/{slug}"
 
 HEADERS = {
     "User-Agent": (
@@ -73,6 +76,39 @@ def fetch_download_count(slug: str) -> dict:
     return {"name": name, "downloadCount": count}
 
 
+def fetch_latest_file_version(slug: str) -> dict | None:
+    """
+    Лучшее-доступное определение последней версии файла мода.
+
+    ВАЖНО: страница /files на curseforge.com рендерится через JS, поэтому
+    надёжно распарсить версию из обычного HTML (как скачивания) не получится.
+    Используется бесплатный сторонний сервис cfwidget.com (без ключа),
+    который зеркалит список файлов проекта. Если cfwidget недоступен —
+    функция просто возвращает None, и уведомление о версии в этом часе
+    не отправляется (не критично, ошибка не прерывает остальной отчёт).
+    """
+    try:
+        resp = requests.get(CFWIDGET_URL.format(slug=slug), headers=HEADERS, timeout=20)
+        if resp.status_code == 202:
+            # cfwidget ещё индексирует проект впервые — данных пока нет
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        files = data.get("files") or []
+        if not files:
+            return None
+        latest = files[0]  # cfwidget отдаёт файлы от новых к старым
+        file_id = latest.get("id")
+        if file_id is None:
+            return None
+        return {
+            "file_id": str(file_id),
+            "file_name": latest.get("display") or latest.get("name") or str(file_id),
+        }
+    except Exception:
+        return None
+
+
 def send_telegram(token: str, chat_id: str, text: str):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     resp = requests.post(
@@ -80,6 +116,18 @@ def send_telegram(token: str, chat_id: str, text: str):
         json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
         timeout=20,
     )
+    resp.raise_for_status()
+
+
+def send_telegram_photo(token: str, chat_id: str, photo_path: Path, caption: str = ""):
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    with open(photo_path, "rb") as f:
+        resp = requests.post(
+            url,
+            data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+            files={"photo": f},
+            timeout=30,
+        )
     resp.raise_for_status()
 
 
@@ -92,6 +140,11 @@ def warsaw_offset(dt: datetime) -> int:
     return 2 if dst_start <= dt < dst_end else 1
 
 
+def hourly_keys(history: dict) -> list[str]:
+    """Только настоящие часовые ключи вида YYYY-MM-DDTHH:00 (без посторонних записей)."""
+    return sorted(k for k in history if "T" in k)
+
+
 def make_bar_chart(history: dict, slug: str, hours: int = 24) -> str:
     """Текстовый график скачиваний за последние N часов."""
     now = datetime.now(timezone.utc)
@@ -102,7 +155,6 @@ def make_bar_chart(history: dict, slug: str, hours: int = 24) -> str:
         entry = history.get(key, {}).get(slug)
         counts.append(entry["downloadCount"] if entry else None)
 
-    # Вычисляем дельты между часами
     deltas = []
     for i in range(1, len(counts)):
         if counts[i] is not None and counts[i - 1] is not None:
@@ -130,9 +182,67 @@ def make_bar_chart(history: dict, slug: str, hours: int = 24) -> str:
     return f"`{bar}`  (макс. +{max(known):,}/ч)"
 
 
+def make_png_chart(history: dict, slug: str, name: str, hours: int = 12) -> Path | None:
+    """PNG-график прироста скачиваний по часам за последние N часов."""
+    keys = hourly_keys(history)
+    recent = keys[-(hours + 1):]
+    if len(recent) < 2:
+        return None
+
+    labels, deltas = [], []
+    for i in range(1, len(recent)):
+        prev = history[recent[i - 1]].get(slug, {}).get("downloadCount")
+        curr = history[recent[i]].get(slug, {}).get("downloadCount")
+        if prev is None or curr is None:
+            continue
+        labels.append(recent[i][11:16])
+        deltas.append(curr - prev)
+
+    if not deltas:
+        return None
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    fig, ax = plt.subplots(figsize=(8, 3.2), dpi=150)
+    colors = ["#4caf50" if d >= 0 else "#e53935" for d in deltas]
+    ax.bar(labels, deltas, color=colors)
+    ax.set_title(f"{name} — скачивания за {hours} ч (по часам, UTC)")
+    ax.set_ylabel("Δ за час")
+    ax.axhline(0, color="#999999", linewidth=0.8)
+    ax.tick_params(axis="x", rotation=45)
+    fig.tight_layout()
+
+    out_path = TMP_DIR / f"chart_{slug}.png"
+    fig.savefig(out_path)
+    plt.close(fig)
+    return out_path
+
+
+def trend_arrow(history: dict, slug: str, hour_key: str, delta_hour: int) -> str:
+    """Сравнивает прирост этого часа с приростом предыдущего часа."""
+    keys = [k for k in hourly_keys(history) if k != hour_key]
+    if len(keys) < 2:
+        return "→"
+    p1 = history[keys[-1]].get(slug, {}).get("downloadCount")
+    p0 = history[keys[-2]].get(slug, {}).get("downloadCount")
+    if p1 is None or p0 is None:
+        return "→"
+    prev_delta = p1 - p0
+    if delta_hour > prev_delta:
+        return "↑"
+    if delta_hour < prev_delta:
+        return "↓"
+    return "→"
+
+
 def get_best_hour_today(history: dict, slug: str, today_str: str) -> tuple[int, str] | tuple[None, None]:
     """Лучший час сегодня по приросту."""
-    today_keys = sorted(k for k in history if k.startswith(today_str))
+    today_keys = sorted(k for k in history if k.startswith(today_str) and "T" in k)
     best_delta = None
     best_hour = None
     for i in range(1, len(today_keys)):
@@ -146,16 +256,93 @@ def get_best_hour_today(history: dict, slug: str, today_str: str) -> tuple[int, 
     return best_delta, best_hour
 
 
+def first_download_today(history: dict, slug: str, today_str: str) -> tuple[str, int] | None:
+    """Первый час сегодня, когда количество скачиваний выросло."""
+    keys = hourly_keys(history)
+    day_keys = [k for k in keys if k.startswith(today_str)]
+    for k in day_keys:
+        idx = keys.index(k)
+        if idx == 0:
+            continue
+        prev_k = keys[idx - 1]
+        prev_v = history.get(prev_k, {}).get(slug, {}).get("downloadCount")
+        curr_v = history.get(k, {}).get(slug, {}).get("downloadCount")
+        if prev_v is not None and curr_v is not None and curr_v > prev_v:
+            return k[11:16], curr_v - prev_v
+    return None
+
+
+def get_recent_deltas(history: dict, slug: str, hours: int, exclude_key: str | None = None) -> list[int]:
+    keys = [k for k in hourly_keys(history) if k != exclude_key]
+    recent = keys[-(hours + 1):]
+    deltas = []
+    for i in range(1, len(recent)):
+        p = history[recent[i - 1]].get(slug, {}).get("downloadCount")
+        c = history[recent[i]].get(slug, {}).get("downloadCount")
+        if p is not None and c is not None:
+            deltas.append(c - p)
+    return deltas
+
+
+def detect_viral(delta_hour: int, recent_deltas: list[int], multiplier: float, min_absolute: int) -> bool:
+    """Вирусный рост: прирост за час намного выше обычного среднего."""
+    if delta_hour < min_absolute:
+        return False
+    positive = [d for d in recent_deltas if d > 0]
+    if not positive:
+        return delta_hour >= min_absolute
+    avg_recent = sum(positive) / len(positive)
+    return delta_hour >= max(min_absolute, avg_recent * multiplier)
+
+
+def avg_per_day(history: dict, slug: str, today_str: str, max_days: int = 14) -> float | None:
+    """Среднее количество скачиваний в день (по полностью завершённым дням)."""
+    by_date: dict[str, list[tuple[str, int]]] = {}
+    for k in hourly_keys(history):
+        date_str = k.split("T")[0]
+        if date_str == today_str:
+            continue  # сегодняшний день неполный — не считаем
+        val = history[k].get(slug, {}).get("downloadCount")
+        if val is None:
+            continue
+        by_date.setdefault(date_str, []).append((k, val))
+
+    day_totals = []
+    for date_str in sorted(by_date.keys())[-max_days:]:
+        items = sorted(by_date[date_str])
+        if len(items) < 2:
+            continue
+        day_totals.append(items[-1][1] - items[0][1])
+
+    if not day_totals:
+        return None
+    return sum(day_totals) / len(day_totals)
+
+
+def get_top_hours(history: dict, slug: str, top_n: int = 10) -> list[tuple[int, str]]:
+    """Топ-N рекордных часов по приросту скачиваний за всю историю."""
+    keys = hourly_keys(history)
+    records = []
+    for i in range(1, len(keys)):
+        prev_v = history[keys[i - 1]].get(slug, {}).get("downloadCount")
+        curr_v = history[keys[i]].get(slug, {}).get("downloadCount")
+        if prev_v is not None and curr_v is not None:
+            d = curr_v - prev_v
+            if d > 0:
+                records.append((d, keys[i]))
+    records.sort(key=lambda x: -x[0])
+    return records[:top_n]
+
+
 def get_streak(history: dict, slug: str, today_str: str) -> int:
     """Количество дней подряд с хоть одним скачиванием."""
     streak = 0
     check_date = _date.fromisoformat(today_str)
     while True:
         date_str = check_date.isoformat()
-        day_keys = [k for k in history if k.startswith(date_str)]
+        day_keys = [k for k in history if k.startswith(date_str) and "T" in k]
         if not day_keys:
             break
-        # Проверяем был ли прирост хоть в один час
         day_keys_sorted = sorted(day_keys)
         had_download = False
         for i in range(1, len(day_keys_sorted)):
@@ -176,14 +363,13 @@ def next_round_number(current: int) -> int | None:
     for milestone in [100, 250, 500, 750, 1000, 2000, 5000, 10000, 25000, 50000, 100000]:
         if current < milestone:
             return milestone
-    # Выше 100к — кратные 100к
     step = 100000
     return ((current // step) + 1) * step
 
 
 def forecast_eod(history: dict, slug: str, today_str: str, current: int) -> int | None:
     """Прогноз скачиваний к концу дня на основе среднего за сегодня."""
-    today_keys = sorted(k for k in history if k.startswith(today_str))
+    today_keys = sorted(k for k in history if k.startswith(today_str) and "T" in k)
     if len(today_keys) < 2:
         return None
     first = history[today_keys[0]].get(slug, {}).get("downloadCount")
@@ -208,7 +394,16 @@ def main():
         print("Нет проектов в config.json — нечего считать.")
         sys.exit(1)
 
+    # Настройки новых фич (с дефолтами, можно переопределить в config.json)
+    viral_multiplier = float(cfg.get("viral_multiplier", 4))
+    viral_min_absolute = int(cfg.get("viral_min_absolute", 20))
+    check_new_version = bool(cfg.get("check_new_version", True))
+    send_png_chart = bool(cfg.get("send_png_chart", True))
+    png_chart_hours = int(cfg.get("png_chart_hours", 12))
+    top_records_count = int(cfg.get("top_records_count", 10))
+
     history = load_json(HISTORY_FILE, {})
+    versions = load_json(VERSIONS_FILE, {})
 
     now_utc = datetime.now(timezone.utc)
     hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
@@ -229,9 +424,7 @@ def main():
     day_key   = find_closest_key(now_utc - timedelta(days=1))
     week_key  = find_closest_key(now_utc - timedelta(weeks=1))
     month_key = find_closest_key(now_utc - timedelta(days=30))
-
-    # Прошлая неделя — тот же час 7 дней назад
-    last_week_key = find_closest_key(now_utc - timedelta(weeks=1))
+    last_week_key = week_key
 
     def fmt_delta(current: int, ref_key: str | None, slug: str) -> str:
         if ref_key is None:
@@ -250,77 +443,128 @@ def main():
     total_now = 0
     total_delta_hour = 0
     alerts = []
+    png_charts = []  # [(slug, name, path)]
 
     for proj in projects:
-        slug = proj.get("slug") or proj.get("id")
-        display_name = proj.get("name", str(slug))
+        slug = str(proj.get("slug") or proj.get("id"))
+        display_name = proj.get("name", slug)
         try:
-            stats = fetch_download_count(str(slug))
+            stats = fetch_download_count(slug)
         except Exception as e:
             lines.append(f"⚠️ {display_name}: ошибка ({e})")
+            lines.append("")
             continue
 
         name = stats["name"]
         current = stats["downloadCount"]
-        prev = (history.get(prev_key) or {}).get(str(slug), {}).get("downloadCount")
+        prev = (history.get(prev_key) or {}).get(slug, {}).get("downloadCount")
         delta_hour = current - prev if prev is not None else 0
 
-        hour_entry[str(slug)] = {"name": name, "downloadCount": current}
+        hour_entry[slug] = {"name": name, "downloadCount": current}
+        # Прогрессивно кладём текущий час в history, чтобы все функции ниже
+        # (тренд, "первое скачивание дня", топ-часов и т.д.) видели его сразу.
+        history[hour_key] = hour_entry
+
         total_now += current
         total_delta_hour += delta_hour
 
-        sign = "+" if delta_hour >= 0 else ""
+        # --- Антиспам: если за этот час прироста нет — короткая строка без деталей ---
+        if delta_hour == 0:
+            lines.append(f"📦 <b>{name}</b> — без изменений (всего: {current:,})")
+            lines.append("")
+        else:
+            sign = "+" if delta_hour >= 0 else ""
+            arrow = trend_arrow(history, slug, hour_key, delta_hour)
 
-        lines.append(f"📦 <b>{name}</b>")
-        lines.append(f"   Всего: {current:,}")
-        lines.append(f"   За час: {sign}{delta_hour:,}")
-        lines.append(f"   За день: {fmt_delta(current, day_key, str(slug))}")
-        lines.append(f"   За неделю: {fmt_delta(current, week_key, str(slug))}")
-        lines.append(f"   За месяц: {fmt_delta(current, month_key, str(slug))}")
+            lines.append(f"📦 <b>{name}</b>")
+            lines.append(f"   Всего: {current:,}")
+            lines.append(f"   За час: {sign}{delta_hour:,} {arrow}")
+            lines.append(f"   За день: {fmt_delta(current, day_key, slug)}")
+            lines.append(f"   За неделю: {fmt_delta(current, week_key, slug)}")
+            lines.append(f"   За месяц: {fmt_delta(current, month_key, slug)}")
 
-        # Сравнение с прошлой неделей
-        week_ago = (history.get(last_week_key) or {}).get(str(slug), {}).get("downloadCount")
-        if week_ago is not None and week_ago > 0:
-            diff = current - week_ago
-            sign_w = "+" if diff >= 0 else ""
-            pct = diff / week_ago * 100
-            lines.append(f"   Vs прошлая неделя: {sign_w}{diff:,} ({sign_w}{pct:.0f}%)")
+            week_ago = (history.get(last_week_key) or {}).get(slug, {}).get("downloadCount")
+            if week_ago is not None and week_ago > 0:
+                diff = current - week_ago
+                sign_w = "+" if diff >= 0 else ""
+                pct = diff / week_ago * 100
+                lines.append(f"   Vs прошлая неделя: {sign_w}{diff:,} ({sign_w}{pct:.0f}%)")
 
-        # Рекорд дня
-        best_delta, best_hour_key = get_best_hour_today(history, str(slug), today_str)
-        if best_delta is not None and best_hour_key:
-            best_hour_label = best_hour_key[11:16]  # "HH:00"
-            lines.append(f"   🏆 Рекорд часа сегодня: +{best_delta:,} в {best_hour_label} UTC")
+            # Первое скачивание дня
+            first_dl = first_download_today(history, slug, today_str)
+            if first_dl:
+                lines.append(f"   🌅 Первое скачивание дня: {first_dl[0]} UTC (+{first_dl[1]:,})")
 
-        # Streak
-        streak = get_streak(history, str(slug), today_str)
-        if streak > 0:
-            lines.append(f"   🔥 Серия: {streak} дн. подряд")
+            # Вирусный рост
+            recent_deltas = get_recent_deltas(history, slug, 24, exclude_key=hour_key)
+            if detect_viral(delta_hour, recent_deltas, viral_multiplier, viral_min_absolute):
+                lines.append("   🚀 Вирусный рост! Прирост в разы выше обычного.")
+                alerts.append(f"🚀 <b>{name}</b>: вирусный рост — +{delta_hour:,} за час!")
 
-        # До круглого числа
-        milestone = next_round_number(current)
-        if milestone:
-            left = milestone - current
-            lines.append(f"   🎯 До {milestone:,}: осталось {left:,}")
+            # Рекорд дня
+            best_delta, best_hour_key = get_best_hour_today(history, slug, today_str)
+            if best_delta is not None and best_hour_key:
+                lines.append(f"   🏆 Рекорд часа сегодня: +{best_delta:,} в {best_hour_key[11:16]} UTC")
 
-        # Прогноз к концу дня
-        forecast = forecast_eod(history, str(slug), today_str, current)
-        if forecast:
-            lines.append(f"   📈 Прогноз к концу дня: ~{forecast:,}")
+            # Серия дней
+            streak = get_streak(history, slug, today_str)
+            if streak > 0:
+                lines.append(f"   🔥 Серия: {streak} дн. подряд")
 
-        # График за 24 часа
-        bar = make_bar_chart(history, str(slug))
-        if bar:
-            lines.append(f"   {bar}")
+            # До круглого числа
+            milestone = next_round_number(current)
+            if milestone:
+                left = milestone - current
+                lines.append(f"   🎯 До {milestone:,}: осталось {left:,}")
 
-        lines.append("")
+            # Прогноз к концу дня
+            forecast = forecast_eod(history, slug, today_str, current)
+            if forecast:
+                lines.append(f"   📈 Прогноз к концу дня: ~{forecast:,}")
 
-        # Алерт
+            # Среднее в день
+            avg_day = avg_per_day(history, slug, today_str)
+            if avg_day is not None:
+                lines.append(f"   📊 Среднее в день: ~{avg_day:,.0f}")
+
+            # Текстовый график за 24ч
+            bar = make_bar_chart(history, slug)
+            if bar:
+                lines.append(f"   {bar}")
+
+            # Топ-10 рекордных часов
+            top_hours = get_top_hours(history, slug, top_records_count)
+            if top_hours:
+                lines.append(f"   🏅 Топ-{len(top_hours)} рекордных часов:")
+                for i, (d, k) in enumerate(top_hours, 1):
+                    date_part = f"{k[8:10]}.{k[5:7]}"
+                    lines.append(f"      {i}. +{d:,} — {date_part} {k[11:16]} UTC")
+
+            lines.append("")
+
+        # --- Уведомление о новой версии (независимо от антиспама по скачиваниям) ---
+        if check_new_version:
+            vinfo = fetch_latest_file_version(slug)
+            if vinfo and vinfo.get("file_id"):
+                old = versions.get(slug)
+                if old and old.get("file_id") != vinfo["file_id"]:
+                    alerts.append(
+                        f"🆕 <b>{name}</b>: вышла новая версия — {vinfo.get('file_name')}"
+                    )
+                versions[slug] = vinfo
+
+        # --- Алерт по абсолютному порогу (как раньше) ---
         if delta_hour >= ALERT_THRESHOLD:
             alerts.append(f"🚨 <b>{name}</b>: +{delta_hour:,} скачиваний за час!")
 
-    history[hour_key] = hour_entry
+        # --- PNG-график за N часов (готовим, отправим после текстового отчёта) ---
+        if send_png_chart:
+            chart_path = make_png_chart(history, slug, name, hours=png_chart_hours)
+            if chart_path:
+                png_charts.append((slug, name, chart_path))
+
     save_json(HISTORY_FILE, history)
+    save_json(VERSIONS_FILE, versions)
 
     lines.append(f"<b>Итого (все проекты): {total_now:,}</b>")
     sign_total = "+" if total_delta_hour >= 0 else ""
@@ -328,7 +572,17 @@ def main():
 
     send_telegram(tg_token, tg_chat_id, "\n".join(lines))
 
-    # Алерты отправляем отдельным сообщением
+    for slug, name, chart_path in png_charts:
+        try:
+            send_telegram_photo(
+                tg_token, tg_chat_id, chart_path,
+                caption=f"📈 {name} — последние {png_chart_hours} ч"
+            )
+        except Exception as e:
+            print(f"Не удалось отправить график для {name}: {e}")
+        finally:
+            chart_path.unlink(missing_ok=True)
+
     for alert in alerts:
         send_telegram(tg_token, tg_chat_id, alert)
 
