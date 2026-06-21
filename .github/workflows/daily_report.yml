@@ -1,9 +1,9 @@
-name: Daily CurseForge report
+name: Hourly CurseForge report
 
 on:
   schedule:
-    # каждый день в 09:00 МСК (06:00 UTC) — поменяйте время на своё
-    - cron: "0 6 * * *"
+    # каждый час в 00 минут
+    - cron: "0 * * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -24,12 +24,10 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run daily report
+      - name: Run hourly report
         env:
-          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CURSEFORGE_PROJECT_IDS: ${{ vars.CURSEFORGE_PROJECT_IDS }}
         run: python scripts/daily_report.py
 
       - name: Commit updated history
