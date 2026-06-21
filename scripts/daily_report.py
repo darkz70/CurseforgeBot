@@ -535,4 +535,30 @@ def main():
             send_telegram_photo(tg_token, tg_chat_id, first_chart_path, caption=report_text)
             combined_sent = True
         except Exception as e:
-            print(f"
+            print(f"Не удалось отправить совмещённое сообщение: {e}")
+        finally:
+            first_chart_path.unlink(missing_ok=True)
+        png_charts = png_charts[1:]  # первый график уже отправлен с подписью
+
+    if not combined_sent:
+        send_telegram(tg_token, tg_chat_id, report_text)
+
+    for slug, name, chart_path in png_charts:
+        try:
+            send_telegram_photo(
+                tg_token, tg_chat_id, chart_path,
+                caption=f"📈 {name} — последние {png_chart_hours} ч"
+            )
+        except Exception as e:
+            print(f"Не удалось отправить график для {name}: {e}")
+        finally:
+            chart_path.unlink(missing_ok=True)
+
+    for alert in alerts:
+        send_telegram(tg_token, tg_chat_id, alert)
+
+    print("Отчёт отправлен.")
+
+
+if __name__ == "__main__":
+    main()
