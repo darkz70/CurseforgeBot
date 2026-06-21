@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import date as _date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -102,6 +102,18 @@ def main():
     hour_key = now_utc.strftime("%Y-%m-%dT%H:00")
     hour_label = now_utc.strftime("%d.%m.%Y %H:00 UTC")
 
+    # Варшавское время с минутами
+    def warsaw_offset(dt):
+        year = dt.year
+        last_sun_mar = max(d for d in range(25, 32) if _date(year, 3, d).weekday() == 6)
+        last_sun_oct = max(d for d in range(25, 32) if _date(year, 10, d).weekday() == 6)
+        dst_start = datetime(year, 3, last_sun_mar, 1, tzinfo=timezone.utc)
+        dst_end   = datetime(year, 10, last_sun_oct, 1, tzinfo=timezone.utc)
+        return 2 if dst_start <= dt < dst_end else 1
+
+    warsaw_dt = now_utc + timedelta(hours=warsaw_offset(now_utc))
+    warsaw_label = warsaw_dt.strftime("%H:%M Варшава")
+
     # Ключи для дельт
     sorted_keys = sorted(history.keys())
     prev_key = sorted_keys[-1] if sorted_keys else None
@@ -112,7 +124,7 @@ def main():
         candidates = [k for k in sorted_keys if k <= target_str]
         return candidates[-1] if candidates else None
 
-    from datetime import timedelta
+
     day_key   = find_closest_key(now_utc - timedelta(days=1))
     week_key  = find_closest_key(now_utc - timedelta(weeks=1))
     month_key = find_closest_key(now_utc - timedelta(days=30))
@@ -127,7 +139,7 @@ def main():
         return f"+{d:,}" if d >= 0 else f"{d:,}"
 
     hour_entry = {}
-    lines = [f"<b>📊 CurseForge — {hour_label}</b>", ""]
+    lines = [f"<b>📊 CurseForge — {hour_label} ({warsaw_label})</b>", ""]
 
     total_now = 0
     total_delta_hour = 0
