@@ -562,3 +562,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ─── Конкуренты ────────────────────────────────────────────────────────────────
+
+def fetch_competitors(cfg: dict, history: dict, now_utc: datetime) -> str | None:
+    """Сравнение с конкурентами из config.json -> competitors."""
+    competitors = cfg.get("competitors", [])
+    if not competitors:
+        return None
+
+    lines = ["<b>⚔️ Сравнение с конкурентами</b>"]
+    for comp in competitors:
+        slug = str(comp.get("slug") or comp.get("id"))
+        name = comp.get("name", slug)
+        try:
+            stats = fetch_download_count(slug)
+            current = stats["downloadCount"]
+            lines.append(f"  • {name}: {current:,}")
+        except Exception as e:
+            lines.append(f"  • {name}: ошибка ({e})")
+    return "\n".join(lines)
