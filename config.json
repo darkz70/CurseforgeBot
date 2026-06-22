@@ -3,10 +3,9 @@
     { "slug": "skin-totem", "name": "Skin Totem" }
   ],
   "modrinth_projects": [
-    { "slug": "skintotemmod", "name": "Skin Totem" }
+    { "slug": "skintotemmod", "name": "Skin Totem", "cf_slug": "skin-totem" }
   ],
-  "competitors": [
-  ],
+  "competitors": [],
   "viral_multiplier": 4,
   "viral_min_absolute": 20,
   "send_png_chart": true,
