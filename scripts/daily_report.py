@@ -20,6 +20,7 @@ CONFIG_FILE = ROOT / "config.json"
 TMP_DIR = Path("/tmp")
 
 CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
+CURSEFORGE_API_URL = "https://api.curseforge.com/v1"
 
 HEADERS = {
     "User-Agent": (
@@ -29,6 +30,8 @@ HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+CF_API_KEY = os.environ.get("CURSEFORGE_API_KEY")
 
 ALERT_THRESHOLD = int(os.environ.get("ALERT_THRESHOLD", "50"))
 
@@ -49,8 +52,49 @@ def get_config():
     return load_json(CONFIG_FILE, {})
 
 
-def fetch_download_count(slug: str) -> dict:
-    """Парсит публичную страницу мода на CurseForge — без API-ключа."""
+def fetch_project_id(slug: str) -> int | None:
+    """Получает числовой ID мода по slug через поиск API."""
+    if not CF_API_KEY:
+        return None
+    try:
+        resp = requests.get(
+            f"{CURSEFORGE_API_URL}/mods/search",
+            headers={"x-api-key": CF_API_KEY, "Accept": "application/json"},
+            params={"gameId": 432, "slug": slug, "pageSize": 1},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        if data:
+            return data[0]["id"]
+    except Exception as e:
+        print(f"Ошибка поиска CF API для {slug}: {e}")
+    return None
+
+
+def fetch_download_count(slug: str, project_id: int | None = None) -> dict:
+    """Получает точные данные мода через CurseForge API или парсинг."""
+    # Пробуем API (точные данные)
+    if CF_API_KEY:
+        pid = project_id or fetch_project_id(slug)
+        if pid:
+            try:
+                resp = requests.get(
+                    f"{CURSEFORGE_API_URL}/mods/{pid}",
+                    headers={"x-api-key": CF_API_KEY, "Accept": "application/json"},
+                    timeout=20,
+                )
+                resp.raise_for_status()
+                mod = resp.json().get("data", {})
+                return {
+                    "name": mod.get("name", slug),
+                    "downloadCount": mod.get("downloadCount", 0),
+                    "id": pid,
+                }
+            except Exception as e:
+                print(f"Ошибка CF API для {slug}: {e}")
+
+    # Fallback — парсинг HTML
     url = CURSEFORGE_MOD_URL.format(slug=slug)
     resp = requests.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
@@ -64,19 +108,16 @@ def fetch_download_count(slug: str) -> dict:
             return int(float(s[:-1]) * 1_000)
         return int(float(s))
 
-    # Вариант 1: точное число в <abbr title="1,012">1.0K</abbr>
     abbr_match = re.search(r'<abbr[^>]+title="([\d,]+)"[^>]*>[^<]*[Dd]ownload', html)
     if abbr_match:
         count = int(abbr_match.group(1).replace(",", ""))
     else:
-        # Вариант 2: JSON-LD interactionStatistic
         ld_match = re.search(
             r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S
         )
         if ld_match:
             count = int(ld_match.group(1))
         else:
-            # Вариант 3: текст "1.0K Downloads" (менее точный)
             dl_match = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
             if dl_match:
                 count = parse_cf_number(dl_match.group(1))
@@ -85,7 +126,6 @@ def fetch_download_count(slug: str) -> dict:
 
     title_match = re.search(r'<title>([^<]+)</title>', html)
     name = title_match.group(1).split(" - ")[0].strip() if title_match else slug
-
     return {"name": name, "downloadCount": count}
 
 
@@ -499,7 +539,7 @@ def main():
             forecast = forecast_eod(history, slug, today_str, current)
             if forecast:
                 lines.append(f"   📈 Прогноз к концу дня: ~{forecast:,}")
-
+            
             # Среднее в день
             avg_day = avg_per_day(history, slug, today_str)
             if avg_day is not None:
