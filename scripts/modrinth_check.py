@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Проверяет статус мода на Modrinth и уведомляет в Telegram когда:
-- мод впервые обнаружен (любой статус)
-- статус изменился (одобрен, отклонён и т.д.)
-- выходит новая версия (с красивым changelog)
-- сравнение CurseForge vs Modrinth скачиваний
+Проверяет статус мода на Modrinth через официальный API с токеном.
+- Точные скачивания
+- Статус мода
+- Новые версии с changelog
+- Сравнение CurseForge vs Modrinth
 """
 import json
 import os
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,26 +18,25 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 MODRINTH_FILE = DATA_DIR / "modrinth.json"
 CONFIG_FILE = ROOT / "config.json"
-HISTORY_FILE = DATA_DIR / "history.json"
 
 MODRINTH_API = "https://api.modrinth.com/v2"
-MODRINTH_HEADERS = {"User-Agent": "CurseforgeBot/1.0"}
 
-CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
 CF_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
+
 STATUS_LABELS = {
-    "approved": "✅ Одобрен",
+    "approved":   "✅ Одобрен",
     "processing": "⏳ На рассмотрении",
-    "rejected": "❌ Отклонён",
-    "withheld": "⚠️ Приостановлен",
-    "draft": "📝 Черновик",
-    "unlisted": "🔒 Скрытый",
-    "scheduled": "🕐 Запланирован",
-    "unknown": "❓ Неизвестен",
+    "rejected":   "❌ Отклонён",
+    "withheld":   "⚠️ Приостановлен",
+    "draft":      "📝 Черновик",
+    "unlisted":   "🔒 Скрытый",
+    "scheduled":  "🕐 Запланирован",
+    "unknown":    "❓ Неизвестен",
 }
 
 
@@ -63,9 +61,20 @@ def send_telegram(token, chat_id, text):
     ).raise_for_status()
 
 
-def fetch_modrinth_project(slug: str) -> dict | None:
+def mr_headers(token: str) -> dict:
+    return {
+        "Authorization": token,
+        "User-Agent": "CurseforgeBot/2.0 (github.com/darkz70/CurseforgeBot)",
+    }
+
+
+def fetch_modrinth_project(slug: str, token: str) -> dict | None:
     try:
-        resp = requests.get(f"{MODRINTH_API}/project/{slug}", headers=MODRINTH_HEADERS, timeout=20)
+        resp = requests.get(
+            f"{MODRINTH_API}/project/{slug}",
+            headers=mr_headers(token),
+            timeout=20,
+        )
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
@@ -75,23 +84,18 @@ def fetch_modrinth_project(slug: str) -> dict | None:
         return None
 
 
-def fetch_modrinth_versions(slug: str) -> list:
+def fetch_modrinth_versions(slug: str, token: str) -> list:
     try:
-        resp = requests.get(f"{MODRINTH_API}/project/{slug}/version", headers=MODRINTH_HEADERS, timeout=20)
+        resp = requests.get(
+            f"{MODRINTH_API}/project/{slug}/version",
+            headers=mr_headers(token),
+            timeout=20,
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception:
         return []
 
-
-
-def parse_cf_number(s):
-    s = s.strip().replace(",", "")
-    if s.upper().endswith("M"):
-        return int(float(s[:-1]) * 1_000_000)
-    if s.upper().endswith("K"):
-        return int(float(s[:-1]) * 1_000)
-    return int(float(s))
 
 def fetch_cf_downloads(slug: str) -> int | None:
     try:
@@ -99,12 +103,19 @@ def fetch_cf_downloads(slug: str) -> int | None:
         resp = requests.get(url, headers=CF_HEADERS, timeout=30)
         resp.raise_for_status()
         html = resp.text
+
         ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
         if ld:
             return int(ld.group(1))
+
         dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
         if dl:
-            return parse_cf_number(dl.group(1))
+            s = dl.group(1).strip().replace(",", "")
+            if s.upper().endswith("M"):
+                return int(float(s[:-1]) * 1_000_000)
+            if s.upper().endswith("K"):
+                return int(float(s[:-1]) * 1_000)
+            return int(float(s))
     except Exception:
         pass
     return None
@@ -113,8 +124,8 @@ def fetch_cf_downloads(slug: str) -> int | None:
 def main():
     tg_token = os.environ["TELEGRAM_BOT_TOKEN"]
     tg_chat_id = os.environ["TELEGRAM_CHAT_ID"]
-    # Необязательный канал для анонсов новых версий
     announce_chat_id = os.environ.get("ANNOUNCE_CHAT_ID", tg_chat_id)
+    mr_token = os.environ["MODRINTH_TOKEN"]
 
     cfg = load_json(CONFIG_FILE, {})
     modrinth_projects = cfg.get("modrinth_projects", [])
@@ -133,7 +144,7 @@ def main():
             (s for s, p in cf_projects.items() if p.get("name") == name), None
         )
 
-        data = fetch_modrinth_project(slug)
+        data = fetch_modrinth_project(slug, mr_token)
         if not data:
             print(f"Не удалось получить данные для {slug}")
             continue
@@ -181,8 +192,8 @@ def main():
             send_telegram(tg_token, tg_chat_id, msg)
 
         # Новая версия
-        versions = fetch_modrinth_versions(slug)
-        if versions and status == "approved":
+        versions = fetch_modrinth_versions(slug, mr_token)
+        if versions:
             latest = versions[0]
             latest_id = latest.get("id")
             prev_version_id = prev.get("latest_version_id")
@@ -192,7 +203,6 @@ def main():
                 game_versions = ", ".join(latest.get("game_versions", []))
                 loaders = ", ".join(v.capitalize() for v in latest.get("loaders", []))
                 changelog = (latest.get("changelog") or "").strip()
-                # Обрезаем changelog до 500 символов
                 if len(changelog) > 500:
                     changelog = changelog[:500] + "..."
 
@@ -206,16 +216,13 @@ def main():
                     msg += f"\n📝 <i>{changelog}</i>\n"
                 msg += f"\n🔗 https://modrinth.com/mod/{slug}"
 
-                # Отправляем в основной чат
                 send_telegram(tg_token, tg_chat_id, msg)
-                # Если есть отдельный канал для анонсов — туда тоже
                 if announce_chat_id != tg_chat_id:
                     send_telegram(tg_token, announce_chat_id, msg)
 
-            if versions:
-                state.setdefault(slug, {})["latest_version_id"] = versions[0].get("id")
+            state.setdefault(slug, {})["latest_version_id"] = latest_id
 
-        # Сравнение CurseForge vs Modrinth
+        # Сравнение CurseForge vs Modrinth (только если одобрен)
         if cf_slug and not is_new and status == "approved":
             cf_downloads = fetch_cf_downloads(cf_slug)
             if cf_downloads is not None:
@@ -224,7 +231,6 @@ def main():
                 if prev_cf is not None:
                     delta_cf = cf_downloads - prev_cf
                     delta_mr = downloads_mr - prev_mr
-                    # Отправляем сравнение только если было движение
                     if delta_cf > 0 or delta_mr > 0:
                         total = cf_downloads + downloads_mr
                         cf_pct = cf_downloads / total * 100 if total > 0 else 0
