@@ -64,17 +64,24 @@ def fetch_download_count(slug: str) -> dict:
             return int(float(s[:-1]) * 1_000)
         return int(float(s))
 
-    ld_match = re.search(
-        r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S
-    )
-    if ld_match:
-        count = int(ld_match.group(1))
+    # Вариант 1: точное число в <abbr title="1,012">1.0K</abbr>
+    abbr_match = re.search(r'<abbr[^>]+title="([\d,]+)"[^>]*>[^<]*[Dd]ownload', html)
+    if abbr_match:
+        count = int(abbr_match.group(1).replace(",", ""))
     else:
-        dl_match = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
-        if dl_match:
-            count = parse_cf_number(dl_match.group(1))
+        # Вариант 2: JSON-LD interactionStatistic
+        ld_match = re.search(
+            r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S
+        )
+        if ld_match:
+            count = int(ld_match.group(1))
         else:
-            raise ValueError(f"Не удалось найти число скачиваний на странице: {url}")
+            # Вариант 3: текст "1.0K Downloads" (менее точный)
+            dl_match = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
+            if dl_match:
+                count = parse_cf_number(dl_match.group(1))
+            else:
+                raise ValueError(f"Не удалось найти число скачиваний на странице: {url}")
 
     title_match = re.search(r'<title>([^<]+)</title>', html)
     name = title_match.group(1).split(" - ")[0].strip() if title_match else slug
