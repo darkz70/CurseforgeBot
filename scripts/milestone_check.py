@@ -17,6 +17,9 @@ MILESTONE_FILE = DATA_DIR / "milestones.json"
 CONFIG_FILE = ROOT / "config.json"
 
 CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
+CURSEFORGE_API_URL = "https://api.curseforge.com/v1"
+
+CF_API_KEY = os.environ.get("CURSEFORGE_API_KEY")
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
@@ -169,3 +172,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
