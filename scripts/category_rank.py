@@ -1,6 +1,8 @@
+
 #!/usr/bin/env python3
 """
-Парсит топ модов категории на CurseForge и показывает позицию твоего мода.
+Ищет моды рядом с твоим по скачиваниям на CurseForge.
+Показывает кто обгоняет и кого ты обгоняешь.
 """
 import json
 import os
@@ -15,12 +17,15 @@ DATA_DIR = ROOT / "data"
 RANK_FILE = DATA_DIR / "ranks.json"
 CONFIG_FILE = ROOT / "config.json"
 
+CF_API_URL = "https://api.curseforge.com/v1"
+CF_API_KEY = os.environ.get("CURSEFORGE_API_KEY")
+
+CF_PAGE_URL = "https://www.curseforge.com/minecraft/mc-mods?sortBy=total-downloads&gameVersionTypeId=1&page={page}"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
-
-CF_CATEGORY_URL = "https://www.curseforge.com/minecraft/mc-mods?sortBy=total-downloads&page={page}"
 
 
 def load_json(path, default):
@@ -44,28 +49,100 @@ def send_telegram(token, chat_id, text):
     ).raise_for_status()
 
 
-def fetch_top_mods(pages=5):
-    """Парсит топ модов по скачиваниям (первые pages страниц)."""
-    mods = []
-    for page in range(1, pages + 1):
-        try:
-            url = CF_CATEGORY_URL.format(page=page)
-            resp = requests.get(url, headers=HEADERS, timeout=30)
-            resp.raise_for_status()
-            html = resp.text
+def fetch_neighbors_via_api(my_downloads: int, my_cf_id: int) -> dict:
+    """Ищет моды рядом по скачиваниям через CF API."""
+    if not CF_API_KEY:
+        return {}
 
-            # Ищем slug и название каждого мода
-            matches = re.findall(
-                r'href="/minecraft/mc-mods/([^"]+)"[^>]*>([^<]{3,60})</a>',
-                html
+    try:
+        # Ищем моды с сортировкой по скачиваниям, берём страницы вокруг нашего числа
+        above = []
+        below = []
+
+        # Поиск модов с похожим числом скачиваний
+        for page in range(0, 5):
+            resp = requests.get(
+                f"{CF_API_URL}/mods/search",
+                headers={"x-api-key": CF_API_KEY, "Accept": "application/json"},
+                params={
+                    "gameId": 432,
+                    "classId": 6,  # Mods
+                    "sortField": 6,  # TotalDownloads
+                    "sortOrder": "desc",
+                    "pageSize": 50,
+                    "index": page * 50,
+                },
+                timeout=20,
             )
-            for slug, title in matches:
-                if slug not in [m["slug"] for m in mods]:
-                    mods.append({"slug": slug, "name": title.strip(), "page": page})
+            resp.raise_for_status()
+            mods = resp.json().get("data", [])
+            if not mods:
+                break
+
+            for mod in mods:
+                dl = mod.get("downloadCount", 0)
+                mod_id = mod.get("id")
+                name = mod.get("name", "")
+                slug = mod.get("slug", "")
+
+                if mod_id == my_cf_id:
+                    continue
+
+                if dl > my_downloads:
+                    above.append({"name": name, "slug": slug, "downloads": dl, "id": mod_id})
+                elif dl <= my_downloads:
+                    below.append({"name": name, "slug": slug, "downloads": dl, "id": mod_id})
+
+            # Если нашли достаточно модов ниже — хватит
+            if len(below) >= 3:
+                break
+
+        # Берём 3 ближайших выше и 3 ниже
+        above_sorted = sorted(above, key=lambda x: x["downloads"])[:3]
+        below_sorted = sorted(below, key=lambda x: x["downloads"], reverse=True)[:3]
+
+        return {"above": above_sorted, "below": below_sorted}
+
+    except Exception as e:
+        print(f"Ошибка CF API поиска соседей: {e}")
+        return {}
+
+
+def fetch_my_downloads(slug: str, cf_id: int | None) -> int | None:
+    """Получает текущее число скачиваний мода."""
+    if CF_API_KEY and cf_id:
+        try:
+            resp = requests.get(
+                f"{CF_API_URL}/mods/{cf_id}",
+                headers={"x-api-key": CF_API_KEY, "Accept": "application/json"},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            return resp.json().get("data", {}).get("downloadCount")
         except Exception as e:
-            print(f"Ошибка парсинга страницы {page}: {e}")
-            break
-    return mods
+            print(f"Ошибка получения скачиваний: {e}")
+
+    # Fallback — парсинг HTML
+    try:
+        url = f"https://www.curseforge.com/minecraft/mc-mods/{slug}"
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        html = resp.text
+        abbr = re.search(r'<abbr[^>]+title="([\d,]+)"[^>]*>[^<]*[Dd]ownload', html)
+        if abbr:
+            return int(abbr.group(1).replace(",", ""))
+        ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
+        if ld:
+            return int(ld.group(1))
+        dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
+        if dl:
+            s = dl.group(1).strip().replace(",", "")
+            if s.upper().endswith("M"): return int(float(s[:-1]) * 1_000_000)
+            if s.upper().endswith("K"): return int(float(s[:-1]) * 1_000)
+            return int(float(s))
+    except Exception:
+        pass
+    return None
 
 
 def main():
@@ -76,42 +153,67 @@ def main():
     projects = cfg.get("projects", [])
     state = load_json(RANK_FILE, {})
 
-    top_mods = fetch_top_mods(pages=10)
-    top_slugs = [m["slug"] for m in top_mods]
-
     for proj in projects:
         slug = str(proj.get("slug") or proj.get("id"))
         name = proj.get("name", slug)
+        cf_id = proj.get("cf_id")
 
-        if slug in top_slugs:
-            rank = top_slugs.index(slug) + 1
-            prev_rank = state.get(slug, {}).get("rank")
+        my_downloads = fetch_my_downloads(slug, cf_id)
+        if my_downloads is None:
+            print(f"Не удалось получить скачивания для {name}")
+            continue
 
-            rank_change = ""
-            if prev_rank and prev_rank != rank:
-                diff = prev_rank - rank
-                if diff > 0:
-                    rank_change = f" (↑ +{diff} позиций)"
-                else:
-                    rank_change = f" (↓ {abs(diff)} позиций)"
+        print(f"{name}: {my_downloads:,} скачиваний")
 
-            msg = (
-                f"🏆 <b>{name}</b> в топе CurseForge!\n"
-                f"Позиция: <b>#{rank}</b>{rank_change}\n"
-                f"из топ-{len(top_slugs)} модов по скачиваниям\n"
-                f"https://www.curseforge.com/minecraft/mc-mods/{slug}"
-            )
-            send_telegram(tg_token, tg_chat_id, msg)
+        neighbors = fetch_neighbors_via_api(my_downloads, cf_id or 0)
 
-            state.setdefault(slug, {})["rank"] = rank
-        else:
-            print(f"{name} не найден в топ-{len(top_slugs)}")
-            state.setdefault(slug, {})["rank"] = None
+        above = neighbors.get("above", [])
+        below = neighbors.get("below", [])
 
-        state[slug]["checked_at"] = datetime.now(timezone.utc).isoformat()
+        if not above and not below:
+            print(f"Соседи не найдены для {name}")
+            state.setdefault(slug, {}).update({
+                "downloads": my_downloads,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            })
+            continue
+
+        lines = [f"⚔️ <b>{name}</b> — рейтинг соседей\n📦 Твои скачивания: {my_downloads:,}\n"]
+
+        if above:
+            lines.append("📈 <b>Обгоняют тебя:</b>")
+            for m in above:
+                diff = m["downloads"] - my_downloads
+                lines.append(f"  • {m['name']}: {m['downloads']:,} (+{diff:,})")
+
+        lines.append("")
+
+        if below:
+            lines.append("📉 <b>Ты обгоняешь:</b>")
+            for m in below:
+                diff = my_downloads - m["downloads"]
+                lines.append(f"  • {m['name']}: {m['downloads']:,} (-{diff:,})")
+
+        # Проверяем изменения с прошлого раза
+        prev_above = state.get(slug, {}).get("above_ids", [])
+        curr_above_ids = [m["id"] for m in above]
+        newly_overtaken = [m for m in below if m["id"] in prev_above]
+        if newly_overtaken:
+            lines.append("")
+            lines.append("🎉 <b>Ты обогнал:</b>")
+            for m in newly_overtaken:
+                lines.append(f"  • {m['name']}!")
+
+        send_telegram(tg_token, tg_chat_id, "\n".join(lines))
+
+        state.setdefault(slug, {}).update({
+            "downloads": my_downloads,
+            "above_ids": curr_above_ids,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     save_json(RANK_FILE, state)
-    print("Рейтинг проверен.")
+    print("Рейтинг соседей проверен.")
 
 
 if __name__ == "__main__":
