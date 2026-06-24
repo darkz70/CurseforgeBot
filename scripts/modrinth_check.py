@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Проверяет достижение milestone (круглых чисел скачиваний).
-Запускается при каждом обновлении статистики.
+Проверяет статус мода на Modrinth и уведомляет в Telegram когда:
+- мод впервые обнаружен (любой статус)
+- статус изменился (одобрен, отклонён и т.д.)
+- выходит новая версия (с красивым changelog)
+- сравнение CurseForge vs Modrinth скачиваний
 """
 import json
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,20 +17,29 @@ import requests
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
-MILESTONE_FILE = DATA_DIR / "milestones.json"
+MODRINTH_FILE = DATA_DIR / "modrinth.json"
 CONFIG_FILE = ROOT / "config.json"
+HISTORY_FILE = DATA_DIR / "history.json"
+
+MODRINTH_API = "https://api.modrinth.com/v2"
+MODRINTH_HEADERS = {"User-Agent": "CurseforgeBot/1.0"}
 
 CURSEFORGE_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
-HEADERS = {
+CF_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-MILESTONES = [
-    100, 250, 500, 750, 1_000, 1_500, 2_000, 2_500, 3_000, 4_000, 5_000,
-    7_500, 10_000, 15_000, 20_000, 25_000, 50_000, 75_000, 100_000,
-    250_000, 500_000, 1_000_000,
-]
+STATUS_LABELS = {
+    "approved": "✅ Одобрен",
+    "processing": "⏳ На рассмотрении",
+    "rejected": "❌ Отклонён",
+    "withheld": "⚠️ Приостановлен",
+    "draft": "📝 Черновик",
+    "unlisted": "🔒 Скрытый",
+    "scheduled": "🕐 Запланирован",
+    "unknown": "❓ Неизвестен",
+}
 
 
 def load_json(path, default):
@@ -50,86 +63,194 @@ def send_telegram(token, chat_id, text):
     ).raise_for_status()
 
 
-def fetch_downloads(slug):
-    url = CURSEFORGE_MOD_URL.format(slug=slug)
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    html = resp.text
-    ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
-    if ld:
-        return int(ld.group(1))
-    dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
-    if dl:
-        s = dl.group(1).strip().replace(',', '')
-        if s.upper().endswith('M'): return int(float(s[:-1]) * 1_000_000)
-        if s.upper().endswith('K'): return int(float(s[:-1]) * 1_000)
-        return int(float(s))
+def fetch_modrinth_project(slug: str) -> dict | None:
+    try:
+        resp = requests.get(f"{MODRINTH_API}/project/{slug}", headers=MODRINTH_HEADERS, timeout=20)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"Ошибка Modrinth API для {slug}: {e}")
+        return None
+
+
+def fetch_modrinth_versions(slug: str) -> list:
+    try:
+        resp = requests.get(f"{MODRINTH_API}/project/{slug}/version", headers=MODRINTH_HEADERS, timeout=20)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return []
+
+
+
+def parse_cf_number(s):
+    s = s.strip().replace(",", "")
+    if s.upper().endswith("M"):
+        return int(float(s[:-1]) * 1_000_000)
+    if s.upper().endswith("K"):
+        return int(float(s[:-1]) * 1_000)
+    return int(float(s))
+
+def fetch_cf_downloads(slug: str) -> int | None:
+    try:
+        url = CURSEFORGE_MOD_URL.format(slug=slug)
+        resp = requests.get(url, headers=CF_HEADERS, timeout=30)
+        resp.raise_for_status()
+        html = resp.text
+        ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
+        if ld:
+            return int(ld.group(1))
+        dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
+        if dl:
+            return parse_cf_number(dl.group(1))
+    except Exception:
+        pass
     return None
-
-
-def next_milestone(current):
-    for m in MILESTONES:
-        if current < m:
-            return m
-    step = 500_000
-    return ((current // step) + 1) * step
-
-
-def milestone_emoji(m):
-    if m >= 1_000_000:
-        return "🏆"
-    if m >= 100_000:
-        return "💎"
-    if m >= 10_000:
-        return "🥇"
-    if m >= 1_000:
-        return "🎯"
-    return "⭐"
 
 
 def main():
     tg_token = os.environ["TELEGRAM_BOT_TOKEN"]
     tg_chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    # Необязательный канал для анонсов новых версий
+    announce_chat_id = os.environ.get("ANNOUNCE_CHAT_ID", tg_chat_id)
 
     cfg = load_json(CONFIG_FILE, {})
-    projects = cfg.get("projects", [])
-    state = load_json(MILESTONE_FILE, {})
+    modrinth_projects = cfg.get("modrinth_projects", [])
+    cf_projects = {p["slug"]: p for p in cfg.get("projects", [])}
 
-    for proj in projects:
-        slug = str(proj.get("slug") or proj.get("id"))
+    if not modrinth_projects:
+        print("Нет modrinth_projects в config.json — пропускаем.")
+        return
+
+    state = load_json(MODRINTH_FILE, {})
+
+    for proj in modrinth_projects:
+        slug = proj.get("slug")
         name = proj.get("name", slug)
+        cf_slug = proj.get("cf_slug") or next(
+            (s for s, p in cf_projects.items() if p.get("name") == name), None
+        )
 
-        current = fetch_downloads(slug)
-        if current is None:
+        data = fetch_modrinth_project(slug)
+        if not data:
+            print(f"Не удалось получить данные для {slug}")
             continue
 
-        prev = state.get(slug, {}).get("downloads", 0)
-        reached = state.get(slug, {}).get("reached", [])
+        status = data.get("status", "unknown")
+        downloads_mr = data.get("downloads", 0)
+        followers = data.get("followers", 0)
+        prev = state.get(slug, {})
+        prev_status = prev.get("status")
+        is_new = prev_status is None
 
-        # Проверяем все milestone между prev и current
-        newly_reached = [m for m in MILESTONES if prev < m <= current and m not in reached]
+        status_label = STATUS_LABELS.get(status, status)
 
-        for m in newly_reached:
-            emoji = milestone_emoji(m)
-            next_m = next_milestone(current)
+        # Первое обнаружение
+        if is_new:
             msg = (
-                f"{emoji} <b>{name}</b> достиг {m:,} скачиваний на CurseForge!\n\n"
-                f"🎉 Поздравляем с новым рубежом!\n"
-                f"📦 Текущий счёт: {current:,}\n"
-                f"🎯 Следующая цель: {next_m:,} (осталось {next_m - current:,})"
+                f"👁 <b>{name}</b> найден на Modrinth!\n"
+                f"Статус: <b>{status_label}</b>\n"
+                f"Скачиваний: {downloads_mr:,}\n"
+                f"Подписчиков: {followers:,}\n"
+                f"https://modrinth.com/mod/{slug}"
             )
             send_telegram(tg_token, tg_chat_id, msg)
-            reached.append(m)
-            print(f"Milestone {m:,} достигнут для {name}!")
 
+        # Изменение статуса
+        elif prev_status != status:
+            if status == "approved":
+                msg = (
+                    f"🎉 <b>{name}</b> одобрен на Modrinth!\n"
+                    f"Статус: {STATUS_LABELS.get(prev_status, prev_status)} → <b>{status_label}</b>\n"
+                    f"Скачиваний: {downloads_mr:,} | Подписчиков: {followers:,}\n"
+                    f"https://modrinth.com/mod/{slug}"
+                )
+            elif status == "rejected":
+                msg = (
+                    f"😔 <b>{name}</b> отклонён на Modrinth.\n"
+                    f"Статус: {STATUS_LABELS.get(prev_status, prev_status)} → <b>{status_label}</b>\n"
+                    f"Проверь почту или раздел модерации."
+                )
+            else:
+                msg = (
+                    f"ℹ️ <b>{name}</b> на Modrinth: статус изменился\n"
+                    f"{STATUS_LABELS.get(prev_status, prev_status)} → <b>{status_label}</b>"
+                )
+            send_telegram(tg_token, tg_chat_id, msg)
+
+        # Новая версия
+        versions = fetch_modrinth_versions(slug)
+        if versions and status == "approved":
+            latest = versions[0]
+            latest_id = latest.get("id")
+            prev_version_id = prev.get("latest_version_id")
+
+            if prev_version_id and prev_version_id != latest_id:
+                ver_name = latest.get("name", latest_id)
+                game_versions = ", ".join(latest.get("game_versions", []))
+                loaders = ", ".join(v.capitalize() for v in latest.get("loaders", []))
+                changelog = (latest.get("changelog") or "").strip()
+                # Обрезаем changelog до 500 символов
+                if len(changelog) > 500:
+                    changelog = changelog[:500] + "..."
+
+                msg = (
+                    f"🆕 <b>{name}</b> — новая версия!\n"
+                    f"<b>{ver_name}</b>\n"
+                    f"🎮 MC: {game_versions}\n"
+                    f"⚙️ {loaders}\n"
+                )
+                if changelog:
+                    msg += f"\n📝 <i>{changelog}</i>\n"
+                msg += f"\n🔗 https://modrinth.com/mod/{slug}"
+
+                # Отправляем в основной чат
+                send_telegram(tg_token, tg_chat_id, msg)
+                # Если есть отдельный канал для анонсов — туда тоже
+                if announce_chat_id != tg_chat_id:
+                    send_telegram(tg_token, announce_chat_id, msg)
+
+            if versions:
+                state.setdefault(slug, {})["latest_version_id"] = versions[0].get("id")
+
+        # Сравнение CurseForge vs Modrinth
+        if cf_slug and not is_new and status == "approved":
+            cf_downloads = fetch_cf_downloads(cf_slug)
+            if cf_downloads is not None:
+                prev_cf = prev.get("cf_downloads")
+                prev_mr = prev.get("mr_downloads", 0)
+                if prev_cf is not None:
+                    delta_cf = cf_downloads - prev_cf
+                    delta_mr = downloads_mr - prev_mr
+                    # Отправляем сравнение только если было движение
+                    if delta_cf > 0 or delta_mr > 0:
+                        total = cf_downloads + downloads_mr
+                        cf_pct = cf_downloads / total * 100 if total > 0 else 0
+                        mr_pct = downloads_mr / total * 100 if total > 0 else 0
+                        msg = (
+                            f"📊 <b>{name}</b> — CurseForge vs Modrinth\n\n"
+                            f"🟠 CurseForge: {cf_downloads:,} ({cf_pct:.0f}%)"
+                            + (f" +{delta_cf:,}" if delta_cf > 0 else "") + "\n"
+                            f"🟢 Modrinth: {downloads_mr:,} ({mr_pct:.0f}%)"
+                            + (f" +{delta_mr:,}" if delta_mr > 0 else "") + "\n"
+                            f"📦 Всего: {total:,}"
+                        )
+                        send_telegram(tg_token, tg_chat_id, msg)
+                state.setdefault(slug, {})["cf_downloads"] = cf_downloads
+
+        # Сохраняем состояние
         state.setdefault(slug, {}).update({
-            "downloads": current,
-            "reached": reached,
+            "status": status,
+            "name": name,
+            "mr_downloads": downloads_mr,
+            "followers": followers,
             "checked_at": datetime.now(timezone.utc).isoformat(),
         })
 
-    save_json(MILESTONE_FILE, state)
-    print("Milestone проверен.")
+    save_json(MODRINTH_FILE, state)
+    print("Modrinth проверен.")
 
 
 if __name__ == "__main__":
