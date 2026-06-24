@@ -104,10 +104,12 @@ def fetch_cf_downloads(slug: str) -> int | None:
         resp.raise_for_status()
         html = resp.text
 
+        abbr = re.search(r'<abbr[^>]+title="([\d,]+)"[^>]*>[^<]*[Dd]ownload', html)
+        if abbr:
+            return int(abbr.group(1).replace(",", ""))
         ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
         if ld:
             return int(ld.group(1))
-
         dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
         if dl:
             s = dl.group(1).strip().replace(",", "")
