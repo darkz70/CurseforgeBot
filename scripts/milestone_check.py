@@ -58,9 +58,12 @@ def fetch_downloads(slug):
     ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
     if ld:
         return int(ld.group(1))
-    dl = re.search(r'([\d,]+)\s+Downloads', html)
+    dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
     if dl:
-        return int(dl.group(1).replace(",", ""))
+        s = dl.group(1).strip().replace(',', '')
+        if s.upper().endswith('M'): return int(float(s[:-1]) * 1_000_000)
+        if s.upper().endswith('K'): return int(float(s[:-1]) * 1_000)
+        return int(float(s))
     return None
 
 
