@@ -56,15 +56,23 @@ def fetch_download_count(slug: str) -> dict:
     resp.raise_for_status()
     html = resp.text
 
+    def parse_cf_number(s):
+        s = s.strip().replace(",", "")
+        if s.upper().endswith("M"):
+            return int(float(s[:-1]) * 1_000_000)
+        if s.upper().endswith("K"):
+            return int(float(s[:-1]) * 1_000)
+        return int(float(s))
+
     ld_match = re.search(
         r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S
     )
     if ld_match:
         count = int(ld_match.group(1))
     else:
-        dl_match = re.search(r'([\d,]+)\s+Downloads', html)
+        dl_match = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
         if dl_match:
-            count = int(dl_match.group(1).replace(",", ""))
+            count = parse_cf_number(dl_match.group(1))
         else:
             raise ValueError(f"Не удалось найти число скачиваний на странице: {url}")
 
