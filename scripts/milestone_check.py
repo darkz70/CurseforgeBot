@@ -50,27 +50,58 @@ def send_telegram(token, chat_id, text):
     ).raise_for_status()
 
 
+def fetch_project_id(slug):
+    if not CF_API_KEY:
+        return None
+    try:
+        resp = requests.get(
+            f"{CURSEFORGE_API_URL}/mods/search",
+            headers={"x-api-key": CF_API_KEY, "Accept": "application/json"},
+            params={"gameId": 432, "slug": slug, "pageSize": 1},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        return data[0]["id"] if data else None
+    except Exception:
+        return None
+
+
 def fetch_downloads(slug):
-    url = CURSEFORGE_MOD_URL.format(slug=slug)
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    html = resp.text
-    # Точное число в <abbr title="1,012">
-    abbr = re.search(r'<abbr[^>]+title="([\d,]+)"[^>]*>[^<]*[Dd]ownload', html)
-    if abbr:
-        return int(abbr.group(1).replace(",", ""))
-    ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
-    if ld:
-        return int(ld.group(1))
-    dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
-    if dl:
-        s = dl.group(1).strip().replace(',', '')
-        if s.upper().endswith('M'): return int(float(s[:-1]) * 1_000_000)
-        if s.upper().endswith('K'): return int(float(s[:-1]) * 1_000)
-        return int(float(s))
+    if CF_API_KEY:
+        pid = fetch_project_id(slug)
+        if pid:
+            try:
+                resp = requests.get(
+                    f"{CURSEFORGE_API_URL}/mods/{pid}",
+                    headers={"x-api-key": CF_API_KEY, "Accept": "application/json"},
+                    timeout=20,
+                )
+                resp.raise_for_status()
+                return resp.json().get("data", {}).get("downloadCount")
+            except Exception as e:
+                print(f"CF API error: {e}")
+    # Fallback HTML
+    try:
+        url = CURSEFORGE_MOD_URL.format(slug=slug)
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        html = resp.text
+        abbr = re.search(r'<abbr[^>]+title="([\d,]+)"[^>]*>[^<]*[Dd]ownload', html)
+        if abbr:
+            return int(abbr.group(1).replace(",", ""))
+        ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
+        if ld:
+            return int(ld.group(1))
+        dl = re.search(r'([\d,.]+[KkMm]?)\s+Downloads', html)
+        if dl:
+            s = dl.group(1).strip().replace(',', '')
+            if s.upper().endswith('M'): return int(float(s[:-1]) * 1_000_000)
+            if s.upper().endswith('K'): return int(float(s[:-1]) * 1_000)
+            return int(float(s))
+    except Exception:
+        pass
     return None
-
-
 def next_milestone(current):
     for m in MILESTONES:
         if current < m:
