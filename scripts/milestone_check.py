@@ -55,6 +55,10 @@ def fetch_downloads(slug):
     resp = requests.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     html = resp.text
+    # Точное число в <abbr title="1,012">
+    abbr = re.search(r'<abbr[^>]+title="([\d,]+)"[^>]*>[^<]*[Dd]ownload', html)
+    if abbr:
+        return int(abbr.group(1).replace(",", ""))
     ld = re.search(r'"interactionStatistic".*?"userInteractionCount"\s*:\s*(\d+)', html, re.S)
     if ld:
         return int(ld.group(1))
