@@ -1,6 +1,6 @@
 {
   "projects": [
-    { "slug": "skin-totem", "name": "Skin Totem" }
+    { "slug": "skin-totem", "name": "Skin Totem", "cf_id": 1567155 }
   ],
   "modrinth_projects": [
     { "slug": "skintotemmod", "name": "Skin Totem", "cf_slug": "skin-totem" }
