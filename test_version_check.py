@@ -87,7 +87,17 @@ def run(cf_payload, mr_payload):
     return code
 
 
+_ORIGINAL_VERSIONS = vc.VERSIONS_FILE.read_text() if vc.VERSIONS_FILE.exists() else "{}"
+
+
 def main():
+    try:
+        _run_all()
+    finally:
+        vc.VERSIONS_FILE.write_text(_ORIGINAL_VERSIONS)  # не трогаем боевые данные
+
+
+def _run_all():
     reset_state()
 
     # 1) первый запуск — приветствие, запоминание версий

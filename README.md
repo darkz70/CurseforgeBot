@@ -68,15 +68,23 @@
 ## Структура проекта
 ```
 .github/workflows/daily_report.yml   — почасовой отчёт по скачиваниям
+.github/workflows/daily_digest.yml   — ежедневный дайджест (21:00 UTC)
+.github/workflows/weekly_report.yml  — еженедельный PDF-отчёт (вс 20:00 UTC)
+.github/workflows/milestone_check.yml— круглые числа скачиваний (каждые 30 мин)
 .github/workflows/version_check.yml  — проверка новых версий мода (каждые 30 мин)
-.github/workflows/add_money.yml      — ручная запись дохода
+.github/workflows/category_rank.yml  — рейтинг мода в категории (раз в день)
+.github/workflows/modrinth_check.yml — статус мода на Modrinth (каждый час)
+.github/workflows/server_status.yml  — доступность CurseForge/Modrinth (каждые 15 мин)
 scripts/daily_report.py              — логика отчёта (скачивания + доход)
+scripts/daily_digest.py              — дайджест дня
+scripts/weekly_report.py             — недельный PDF с графиками
+scripts/milestone_check.py           — майлстоуны скачиваний
 scripts/version_check.py             — уведомления о новых версиях мода
-scripts/add_money.py                 — логика записи дохода
-config.json                          — список проектов CurseForge / Modrinth
-data/history.json                    — история скачиваний по дням (авто)
-data/versions.json                   — известные версии мода (авто)
-data/money.json                      — история дохода по дням (авто)
+scripts/category_rank.py             — рейтинг в категории по скачиваниям
+scripts/modrinth_check.py            — статус и версии на Modrinth
+scripts/server_status.py             — мониторинг доступности сервисов
+config.json                          — список проектов + настройки
+data/                                — состояние (история, ранги, версии — авто)
 ```
 
 ## Новые фичи (добавлены)
@@ -91,6 +99,9 @@ data/money.json                      — история дохода по дня
 | 🚀 Вирусный рост | Если прирост за час в N раз больше обычного (настройка `viral_multiplier`) — отдельный алерт |
 | 🏅 Топ-10 рекордных часов | Список лучших часов по приросту за всю историю |
 | 🎉 Новые версии мода | Уведомление в Telegram, когда на CurseForge/Modrinth выходит новая версия (каждые 30 мин, `version_check.yml`) |
+| 🏆 Рейтинг в категории | Позиция мода в категории CurseForge по скачиваниям; уведомление при изменении места (раз в день, `category_rank.yml`, нужен `CURSEFORGE_API_KEY`) |
+| 🟢 Статус на Modrinth | Мониторинг статуса мода (одобрен/отклонён/на проверке), новые версии и сравнение скачиваний CurseForge vs Modrinth (каждый час, `modrinth_check.yml`) |
+| 🔴 Доступность сервисов | Алерты, если CurseForge/Modrinth/GitHub легли или восстановились (каждые 15 мин, `server_status.yml`) |
 
 ## 🆕 Уведомления о новых версиях мода
 

@@ -6,6 +6,8 @@
     { "slug": "skintotemmod", "name": "Skin Totem", "cf_slug": "skin-totem" }
   ],
   "competitors": [],
+  "game_id": 432,
+  "category_id": 6,
   "viral_multiplier": 4,
   "viral_min_absolute": 20,
   "send_png_chart": true,

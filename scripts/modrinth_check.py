@@ -127,7 +127,7 @@ def main():
     tg_token = os.environ["TELEGRAM_BOT_TOKEN"]
     tg_chat_id = os.environ["TELEGRAM_CHAT_ID"]
     announce_chat_id = os.environ.get("ANNOUNCE_CHAT_ID", tg_chat_id)
-    mr_token = os.environ["MODRINTH_TOKEN"]
+    mr_token = os.environ.get("MODRINTH_TOKEN", "")  # публичные моды работают без токена
 
     cfg = load_json(CONFIG_FILE, {})
     modrinth_projects = cfg.get("modrinth_projects", [])
