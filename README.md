@@ -75,6 +75,8 @@
 .github/workflows/category_rank.yml  — рейтинг мода в категории (раз в день)
 .github/workflows/modrinth_check.yml — статус мода на Modrinth (каждый час)
 .github/workflows/server_status.yml  — доступность CurseForge/Modrinth (каждые 15 мин)
+.github/workflows/download_totals.yml— сводка «сколько всего скачиваний» (вручную)
+scripts/download_totals.py           — текущее число скачиваний по модам и платформам
 scripts/daily_report.py              — логика отчёта (скачивания + доход)
 scripts/daily_digest.py              — дайджест дня
 scripts/weekly_report.py             — недельный PDF с графиками
@@ -99,6 +101,7 @@ data/                                — состояние (история, р�
 | 🚀 Вирусный рост | Если прирост за час в N раз больше обычного (настройка `viral_multiplier`) — отдельный алерт |
 | 🏅 Топ-10 рекордных часов | Список лучших часов по приросту за всю историю |
 | 🎉 Новые версии мода | Уведомление в Telegram, когда на CurseForge/Modrinth выходит новая версия (каждые 30 мин, `version_check.yml`) |
+| 📦 Сколько всего скачиваний | Сводка по каждому моду: CurseForge + Modrinth + общий итог; по кнопке **Actions → Download totals → Run workflow** (`download_totals.yml`) |
 | 🏆 Рейтинг в категории | Позиция мода в категории CurseForge по скачиваниям; уведомление при изменении места (раз в день, `category_rank.yml`, нужен `CURSEFORGE_API_KEY`) |
 | 🟢 Статус на Modrinth | Мониторинг статуса мода (одобрен/отклонён/на проверке), новые версии и сравнение скачиваний CurseForge vs Modrinth (каждый час, `modrinth_check.yml`) |
 | 🔴 Доступность сервисов | Алерты, если CurseForge/Modrinth/GitHub легли или восстановились (каждые 15 мин, `server_status.yml`) |
