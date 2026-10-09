@@ -1,0 +1,13 @@
+{
+  "projects": [
+    { "slug": "skin-totem", "name": "Skin Totem", "cf_id": 1567155 }
+  ],
+  "competitors": [],
+  "game_id": 432,
+  "category_id": 6,
+  "viral_multiplier": 4,
+  "viral_min_absolute": 20,
+  "send_png_chart": true,
+  "png_chart_hours": 12,
+  "top_records_count": 10
+}
