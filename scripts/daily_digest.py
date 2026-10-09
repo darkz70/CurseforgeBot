@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
 HISTORY_FILE = DATA_DIR / "history.json"
 CONFIG_FILE = ROOT / "config.json"
-MODRINTH_FILE = DATA_DIR / "modrinth.json"
 
 
 def load_json(path, default):
@@ -109,7 +108,6 @@ def main():
         sys.exit(0)
 
     history = load_json(HISTORY_FILE, {})
-    modrinth = load_json(MODRINTH_FILE, {})
 
     now_utc = datetime.now(timezone.utc)
     today_str = now_utc.strftime("%Y-%m-%d")
@@ -153,16 +151,6 @@ def main():
         lines.append(f"   ⏰ Активных часов: {today_stats['active_hours']}/24")
         if streak_str:
             lines.append(f"   {streak_str}")
-
-        # Modrinth если одобрен
-        mr_data = modrinth.get(slug) or modrinth.get(
-            next((p["slug"] for p in cfg.get("modrinth_projects", []) if p.get("name") == name), ""), {}
-        )
-        if mr_data and mr_data.get("status") == "approved":
-            mr_dl = mr_data.get("mr_downloads", 0)
-            cf_dl = today_stats["final_count"]
-            total_all = cf_dl + mr_dl
-            lines.append(f"   🟠 CF: {cf_dl:,} | 🟢 MR: {mr_dl:,} | Всего: {total_all:,}")
 
         lines.append("")
 

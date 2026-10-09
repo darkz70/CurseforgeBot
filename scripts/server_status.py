@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Проверяет доступность CurseForge и Modrinth.
+Проверяет доступность CurseForge и GitHub.
 Уведомляет если сервер лёг или восстановился.
 """
 import json
@@ -16,7 +16,6 @@ STATUS_FILE = DATA_DIR / "server_status.json"
 
 SERVICES = [
     {"name": "CurseForge", "url": "https://www.curseforge.com", "emoji": "🟠"},
-    {"name": "Modrinth",   "url": "https://modrinth.com",       "emoji": "🟢"},
     {"name": "GitHub",     "url": "https://github.com",         "emoji": "⚫"},
 ]
 

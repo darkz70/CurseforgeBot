@@ -3,9 +3,8 @@
 Уведомления о НОВЫХ ВЕРСИЯХ мода в Telegram.
 
 Проверяет файлы проекта на CurseForge (через официальный API или публичный
-CFWidget API) и версии на Modrinth (публичный API). Как только появляется
-новая версия/файл — присылает уведомление в Telegram с названием версии,
-списком игровых версий, загрузчиков и changelog.
+CFWidget API). Как только появляется новый файл — присылает уведомление
+в Telegram с названием версии, списком игровых версий и changelog.
 
 Состояние хранится в data/versions.json. Первый запуск — «тихая» инициализация
 (запоминает текущую последнюю версию и присылает подтверждение, что бот подключен).
@@ -14,7 +13,6 @@ CFWidget API) и версии на Modrinth (публичный API). Как т�
   TELEGRAM_BOT_TOKEN  — токен бота (обязательно)
   TELEGRAM_CHAT_ID    — id чата (обязательно)
   CURSEFORGE_API_KEY  — ключ CurseForge (опционально; без него используется CFWidget)
-  MODRINTH_TOKEN      — токен Modrinth (опционально; публичные проекты работают без него)
 
 Флаг --dry-run: не слать в Telegram, а печатать сообщения в консоль.
 """
@@ -34,9 +32,7 @@ CONFIG_FILE = ROOT / "config.json"
 
 CF_API_URL = "https://api.curseforge.com/v1"
 CFWIDGET_API = "https://api.cfwidget.com/minecraft/mc-mods/{slug}"
-MODRINTH_API = "https://api.modrinth.com/v2"
 CF_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
-MR_MOD_URL = "https://modrinth.com/mod/{slug}"
 
 HEADERS = {
     "User-Agent": (
@@ -52,7 +48,6 @@ DRY_RUN = "--dry-run" in sys.argv
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 CF_API_KEY = os.environ.get("CURSEFORGE_API_KEY", "")
-MR_TOKEN = os.environ.get("MODRINTH_TOKEN", "")
 
 MAX_CHANGELOG_LEN = 900   # обрезаем слишком длинные чейнджлоги
 MAX_NEW_PER_RUN = 5       # максимум уведомлений за один прогон (анти-спам)
@@ -222,45 +217,6 @@ def fetch_cf_files(project: dict) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------------------
-# Modrinth: получение списка версий
-# ---------------------------------------------------------------------------
-
-def fetch_mr_versions(slug: str) -> list[dict] | None:
-    headers = {"User-Agent": "CurseforgeBot/2.0 (github.com/darkz70/CurseforgeBot)"}
-    if MR_TOKEN:
-        headers["Authorization"] = MR_TOKEN
-    try:
-        resp = requests.get(
-            f"{MODRINTH_API}/project/{slug}/version",
-            params={"per_page": 10},
-            headers=headers,
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            print(f"Modrinth: статус {resp.status_code} для {slug}", file=sys.stderr)
-            return None
-        data = resp.json()
-    except (requests.RequestException, ValueError) as e:
-        print(f"Modrinth: ошибка для {slug}: {e}", file=sys.stderr)
-        return None
-
-    versions = []
-    for v in data:
-        versions.append({
-            "id": v.get("id"),
-            "name": v.get("name") or v.get("version_number") or v.get("id"),
-            "version_number": v.get("version_number", ""),
-            "date": v.get("date_published", ""),
-            "game_versions": v.get("game_versions", []) or [],
-            "loaders": v.get("loaders", []) or [],
-            "changelog": v.get("changelog", "") or "",
-            "downloads": v.get("downloads", 0),
-        })
-    versions.sort(key=lambda x: x["date"] or "", reverse=True)
-    return versions
-
-
-# ---------------------------------------------------------------------------
 # формирование сообщений
 # ---------------------------------------------------------------------------
 
@@ -281,29 +237,11 @@ def msg_new_cf(name: str, slug: str, file: dict) -> str:
     return "\n".join(lines)
 
 
-def msg_new_mr(name: str, slug: str, ver: dict) -> str:
-    gv = ", ".join(ver["game_versions"]) if ver["game_versions"] else "—"
-    loaders = ", ".join(ver["loaders"]) if ver["loaders"] else ""
-    lines = [
-        "🎉 <b>Новая версия мода!</b>",
-        "",
-        f"<b>{html.escape(name)}</b> (Modrinth)",
-        f"📦 {html.escape(str(ver['name']))}",
-        f"🎮 {html.escape(gv)}" + (f"\n⚙️ {html.escape(loaders)}" if loaders else ""),
-        f"🕐 {fmt_dt(ver['date'])}",
-    ]
-    changelog = clean_changelog(ver.get("changelog", ""))
-    if changelog:
-        lines += ["", "<b>Changelog:</b>", html.escape(changelog)]
-    lines += ["", f"🔗 {MR_MOD_URL.format(slug=slug)}/versions"]
-    return "\n".join(lines)
-
-
-def msg_hello(name: str, source: str, latest: dict | None) -> str:
+def msg_hello(name: str, latest: dict | None) -> str:
     ver = html.escape(str(latest["name"])) if latest else "нет данных"
     return (
         "✅ <b>Бот уведомлений о версиях подключен</b>\n\n"
-        f"Слежу за <b>{html.escape(name)}</b> на {source}.\n"
+        f"Слежу за <b>{html.escape(name)}</b> на CurseForge.\n"
         f"Текущая последняя версия: {ver}\n"
         "О новых версиях буду сообщать здесь. 🎉"
     )
@@ -329,7 +267,7 @@ def check_curseforge(project: dict, state: dict, messages: list[str]) -> dict:
     known_ids = set(st.get("known_file_ids", []))
 
     if not st:  # первый запуск — тихая инициализация + подтверждение
-        messages.append(msg_hello(name, "CurseForge", latest))
+        messages.append(msg_hello(name, latest))
         st = {
             "known_file_ids": [f["id"] for f in files[:MAX_NEW_PER_RUN]],
             "last_file_id": latest["id"],
@@ -360,48 +298,6 @@ def check_curseforge(project: dict, state: dict, messages: list[str]) -> dict:
     return st
 
 
-def check_modrinth(mr_project: dict, state: dict, messages: list[str]) -> dict:
-    slug = mr_project.get("slug", "")
-    name = mr_project.get("name") or slug
-    key = f"mr:{slug}"
-    st = state.get(key, {})
-
-    versions = fetch_mr_versions(slug)
-    if not versions:
-        print(f"[{slug}] Modrinth: не удалось получить версии", file=sys.stderr)
-        st["error_at"] = now_iso()
-        return st
-
-    latest = versions[0]
-    known_ids = set(st.get("known_version_ids", []))
-
-    if not st:
-        messages.append(msg_hello(name, "Modrinth", latest))
-        st = {
-            "known_version_ids": [v["id"] for v in versions[:MAX_NEW_PER_RUN]],
-            "last_version_id": latest["id"],
-            "last_date": latest["date"],
-            "checked_at": now_iso(),
-        }
-        return st
-
-    new_versions = [v for v in versions if v["id"] not in known_ids]
-    new_versions.reverse()
-
-    for v in new_versions[:MAX_NEW_PER_RUN]:
-        messages.append(msg_new_mr(name, slug, v))
-
-    if new_versions:
-        known_ids.update(v["id"] for v in new_versions)
-        all_ids = [v["id"] for v in versions]
-        st["known_version_ids"] = [i for i in all_ids if i in known_ids][:20]
-        st["last_version_id"] = latest["id"]
-        st["last_date"] = latest["date"]
-    st["checked_at"] = now_iso()
-    st.pop("error_at", None)
-    return st
-
-
 def main() -> int:
     config = get_config()
     state = load_json(VERSIONS_FILE, {})
@@ -420,18 +316,6 @@ def main() -> int:
             errors += 1
             print(f"[{slug}] CurseForge: исключение: {e}", file=sys.stderr)
             new_state[f"cf:{slug}"] = state.get(f"cf:{slug}", {})
-
-    # Modrinth-проекты
-    for mr in config.get("modrinth_projects", []):
-        slug = mr.get("slug", "")
-        if not slug:
-            continue
-        try:
-            new_state[f"mr:{slug}"] = check_modrinth(mr, state, messages)
-        except Exception as e:  # noqa: BLE001
-            errors += 1
-            print(f"[{slug}] Modrinth: исключение: {e}", file=sys.stderr)
-            new_state[f"mr:{slug}"] = state.get(f"mr:{slug}", {})
 
     if not messages:
         print("Новых версий нет.")

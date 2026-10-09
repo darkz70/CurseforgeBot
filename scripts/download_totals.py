@@ -3,8 +3,8 @@
 Сводка: сколько всего скачиваний у ваших модов (прямо сейчас).
 
 Считает текущее число скачиваний каждого проекта на CurseForge
-(официальный API с ключом либо публичный CFWidget) и на Modrinth,
-присылает в Telegram сводку с итогом по каждому моду и общим числом.
+(официальный API с ключом либо публичный CFWidget) и присылает
+в Telegram сводку с итогом по каждому моду и общим числом.
 
 Запускается вручную: Actions → Download totals → Run workflow.
 Локально: python scripts/download_totals.py --dry-run
@@ -23,7 +23,6 @@ CONFIG_FILE = ROOT / "config.json"
 
 CF_API_URL = "https://api.curseforge.com/v1"
 CFWIDGET_API = "https://api.cfwidget.com/minecraft/mc-mods/{slug}"
-MODRINTH_API = "https://api.modrinth.com/v2"
 
 HEADERS = {
     "User-Agent": (
@@ -92,28 +91,13 @@ def cf_downloads(slug: str, cf_id, api_key: str):
     return None
 
 
-def mr_downloads(slug: str, token: str):
-    headers = {"User-Agent": "CurseforgeBot/2.0 (github.com/darkz70/CurseforgeBot)"}
-    if token:
-        headers["Authorization"] = token
-    try:
-        resp = requests.get(f"{MODRINTH_API}/project/{slug}", headers=headers, timeout=30)
-        if resp.status_code == 200:
-            return resp.json().get("downloads")
-    except (requests.RequestException, ValueError) as e:
-        print(f"Modrinth ({slug}): {e}", file=sys.stderr)
-    return None
-
-
 def main() -> int:
     tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "")
     cf_key = os.environ.get("CURSEFORGE_API_KEY", "")
-    mr_token = os.environ.get("MODRINTH_TOKEN", "")
 
     config = load_json(CONFIG_FILE, {})
     projects = config.get("projects", [])
-    mr_projects = {m.get("cf_slug") or m.get("name"): m for m in config.get("modrinth_projects", [])}
 
     if not projects:
         print("Нет проектов в config.json")
@@ -130,27 +114,14 @@ def main() -> int:
         cf_id = proj.get("cf_id")
 
         cf = cf_downloads(slug, cf_id, cf_key)
-        mr = None
-        mr_proj = mr_projects.get(slug) or mr_projects.get(name)
-        if mr_proj and mr_proj.get("slug"):
-            mr = mr_downloads(mr_proj["slug"], mr_token)
 
         lines.append(f"<b>{html.escape(name)}</b>")
         if cf is not None:
             lines.append(f"  🟠 CurseForge: {fmt(cf)}")
+            grand_total += cf
             any_data = True
         else:
             lines.append("  🟠 CurseForge: нет данных")
-        if mr is not None:
-            lines.append(f"  🟢 Modrinth: {fmt(mr)}")
-            any_data = True
-        elif mr_proj:
-            lines.append("  🟢 Modrinth: нет данных")
-
-        if cf is not None or mr is not None:
-            total = (cf or 0) + (mr or 0)
-            grand_total += total
-            lines.append(f"  📊 Итого: {fmt(total)}")
         lines.append("")
 
     if len(projects) > 1 or grand_total:

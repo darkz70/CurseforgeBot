@@ -36,7 +36,6 @@
 | `CURSEFORGE_API_KEY` | ваш API-ключ CurseForge |
 | `TELEGRAM_BOT_TOKEN` | токен бота из BotFather |
 | `TELEGRAM_CHAT_ID` | ваш chat_id |
-| `MODRINTH_TOKEN` | (опционально) токен Modrinth — нужен только для скрытых/черновых модов |
 
 ### 5. Указать свои проекты
 Откройте `config.json` и замените `id` и `name` на свои проекты:
@@ -73,8 +72,7 @@
 .github/workflows/milestone_check.yml— круглые числа скачиваний (каждые 30 мин)
 .github/workflows/version_check.yml  — проверка новых версий мода (каждые 30 мин)
 .github/workflows/category_rank.yml  — рейтинг мода в категории (раз в день)
-.github/workflows/modrinth_check.yml — статус мода на Modrinth (каждый час)
-.github/workflows/server_status.yml  — доступность CurseForge/Modrinth (каждые 15 мин)
+.github/workflows/server_status.yml  — доступность CurseForge/GitHub (каждые 15 мин)
 .github/workflows/download_totals.yml— сводка «сколько всего скачиваний» (вручную)
 scripts/download_totals.py           — текущее число скачиваний по модам и платформам
 scripts/daily_report.py              — логика отчёта (скачивания + доход)
@@ -83,7 +81,6 @@ scripts/weekly_report.py             — недельный PDF с график�
 scripts/milestone_check.py           — майлстоуны скачиваний
 scripts/version_check.py             — уведомления о новых версиях мода
 scripts/category_rank.py             — рейтинг в категории по скачиваниям
-scripts/modrinth_check.py            — статус и версии на Modrinth
 scripts/server_status.py             — мониторинг доступности сервисов
 config.json                          — список проектов + настройки
 data/                                — состояние (история, ранги, версии — авто)
@@ -100,17 +97,16 @@ data/                                — состояние (история, р�
 | 🔇 Антиспам | Если у проекта за час +0 — для него выводится только короткая строка без статистики (остальные проекты и общий отчёт всё равно отправляются) |
 | 🚀 Вирусный рост | Если прирост за час в N раз больше обычного (настройка `viral_multiplier`) — отдельный алерт |
 | 🏅 Топ-10 рекордных часов | Список лучших часов по приросту за всю историю |
-| 🎉 Новые версии мода | Уведомление в Telegram, когда на CurseForge/Modrinth выходит новая версия (каждые 30 мин, `version_check.yml`) |
-| 📦 Сколько всего скачиваний | Сводка по каждому моду: CurseForge + Modrinth + общий итог; по кнопке **Actions → Download totals → Run workflow** (`download_totals.yml`) |
+| 🎉 Новые версии мода | Уведомление в Telegram, когда на CurseForge выходит новая версия (каждые 30 мин, `version_check.yml`) |
+| 📦 Сколько всего скачиваний | Сводка по каждому моду на CurseForge + общий итог; по кнопке **Actions → Download totals → Run workflow** (`download_totals.yml`) |
 | 🏆 Рейтинг в категории | Позиция мода в категории CurseForge по скачиваниям; уведомление при изменении места (раз в день, `category_rank.yml`, нужен `CURSEFORGE_API_KEY`) |
-| 🟢 Статус на Modrinth | Мониторинг статуса мода (одобрен/отклонён/на проверке), новые версии и сравнение скачиваний CurseForge vs Modrinth (каждый час, `modrinth_check.yml`) |
-| 🔴 Доступность сервисов | Алерты, если CurseForge/Modrinth/GitHub легли или восстановились (каждые 15 мин, `server_status.yml`) |
+| 🔴 Доступность сервисов | Алерты, если CurseForge или GitHub легли или восстановились (каждые 15 мин, `server_status.yml`) |
 
 ## 🆕 Уведомления о новых версиях мода
 
-Теперь бот умеет и это: как только на CurseForge или Modrinth выходит новая
+Теперь бот умеет и это: как только на CurseForge выходит новая
 версия мода — в Telegram сразу приходит уведомление с названием версии,
-игровыми версиями, загрузчиками и changelog.
+игровыми версиями и changelog.
 
 - **Скрипт:** `scripts/version_check.py`
 - **Workflow:** `.github/workflows/version_check.yml` — каждые 30 минут
@@ -122,8 +118,7 @@ data/                                — состояние (история, р�
 уведомление уйдёт при следующем прогоне.
 
 Работает и без ключа CurseForge (через публичный CFWidget), но с
-`CURSEFORGE_API_KEY` берёт точные данные и полные чейнджлоги. Для публичных
-модов на Modrinth токен не нужен; `MODRINTH_TOKEN` — опционально.
+`CURSEFORGE_API_KEY` берёт точные данные и полные чейнджлоги.
 
 Проверить вручную: **Actions → New mod version check → Run workflow**
 (или локально: `python scripts/version_check.py --dry-run` — напечатает

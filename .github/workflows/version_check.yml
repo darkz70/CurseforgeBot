@@ -29,7 +29,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
-          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
         run: python scripts/version_check.py
 
       - name: Commit updated version state

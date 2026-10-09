@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Оффлайн-тесты download_totals.py."""
+"""Оффлайн-тесты download_totals.py (только CurseForge)."""
 import sys
 from pathlib import Path
 from unittest import mock
@@ -23,8 +23,6 @@ class FakeResp:
 def fake_get(url, params=None, headers=None, timeout=None):
     if url.endswith("/mods/1567155"):
         return FakeResp({"data": {"downloadCount": 2671}})
-    if "modrinth" in url:
-        return FakeResp({"downloads": 14})
     raise AssertionError(f"unexpected {url}")
 
 
@@ -40,10 +38,10 @@ def main():
     assert len(SENT) == 1
     msg = SENT[0]
     assert "Скачивания ваших модов" in msg
-    assert "2 671" in msg and "14" in msg
-    assert "2 685" in msg, "итог CF+Modrinth неверный"
+    assert "2 671" in msg
     assert "Skin Totem" in msg
-    print("OK: сводка со скачиваниями по модам и общим итогом")
+    assert "Modrinth" not in msg, "Modrinth должен быть убран"
+    print("OK: сводка со скачиваниями модов (только CurseForge)")
     print("\nПример сообщения:\n" + "-" * 40 + "\n" + msg)
 
 
