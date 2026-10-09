@@ -1,0 +1,14 @@
+{
+  "projects": [
+    { "slug": "skin-totem", "name": "Skin Totem", "cf_id": 1567155 }
+  ],
+  "modrinth_projects": [
+    { "slug": "skintotemmod", "name": "Skin Totem", "cf_slug": "skin-totem" }
+  ],
+  "competitors": [],
+  "viral_multiplier": 4,
+  "viral_min_absolute": 20,
+  "send_png_chart": true,
+  "png_chart_hours": 12,
+  "top_records_count": 10
+}
