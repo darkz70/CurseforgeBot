@@ -3,6 +3,8 @@
     { "slug": "skin-totem-2", "name": "Skin Totem", "cf_id": 1643395 }
   ],
   "competitors": [],
+  "competitors_range": 3,
+  "competitors_daily_table": true,
   "game_id": 432,
   "category_id": 6,
   "viral_multiplier": 4,
