@@ -19,6 +19,7 @@ import html
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,7 +33,8 @@ CONFIG_FILE = ROOT / "config.json"
 CF_API_URL = "https://api.curseforge.com/v1"
 CF_MOD_URL = "https://www.curseforge.com/minecraft/mc-mods/{slug}"
 PAGE_SIZE = 50          # максимум для CF API
-MAX_PAGES = 200         # защита от бесконечного цикла (10 000 модов)
+MAX_PAGES = 60          # ищем в топ-3000 (дальше ранг не информативен)
+PAGE_DELAY = 0.4        # пауза между страницами, чтобы не упереться в лимиты
 
 CF_API_KEY = os.environ.get("CURSEFORGE_API_KEY", "")
 
@@ -82,7 +84,8 @@ def api_get(url: str, params: dict | None = None):
     headers = dict(HEADERS)
     headers["x-api-key"] = CF_API_KEY
     resp = requests.get(url, params=params, headers=headers, timeout=30)
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} для {url}: {resp.text[:300]}")
     return resp.json()
 
 
@@ -125,6 +128,7 @@ def find_rank(cf_id: int, my_downloads: int, game_id: int, category_id: int):
             index = page * PAGE_SIZE
             if index >= total:
                 break
+            time.sleep(PAGE_DELAY)
             data = (fetch_page(game_id, category_id, index) or {}).get("data") or []
             if not data:
                 break
@@ -139,6 +143,7 @@ def find_rank(cf_id: int, my_downloads: int, game_id: int, category_id: int):
             return pos, total
         for page in range(1, MAX_PAGES):
             index = max(total - (page + 1) * PAGE_SIZE, 0)
+            time.sleep(PAGE_DELAY)
             data = (fetch_page(game_id, category_id, index) or {}).get("data") or []
             if not data:
                 break
@@ -186,8 +191,7 @@ def main() -> int:
             print(f"[{slug}] ошибка получения ранка: {e}", file=sys.stderr)
             continue
 
-        # свои скачивания — из данных категории (модем по найденному моду,
-        # либо отдельным запросом, если позиция не нашлась)
+        # свои скачивания — отдельным запросом
         my_downloads = None
         try:
             mod_data = api_get(f"{CF_API_URL}/mods/{int(cf_id)}").get("data") or {}
@@ -211,7 +215,7 @@ def main() -> int:
         dl_str = f"{my_downloads:,}".replace(",", " ") if my_downloads else "—"
 
         if prev_position is None:
-            # первый прогон — только запомним (не спамим), но если есть позиция — сообщим
+            # первый прогон — запомним; если позиция есть — сообщим
             if position is not None:
                 messages.append(
                     f"🏆 <b>{html.escape(name)}</b> — рейтинг в категории зафиксирован:\n"
@@ -245,8 +249,11 @@ def main() -> int:
             return 1
 
     save_json(RANKS_FILE, state)
+    if errors:
+        # API-ошибки не роняют воркфлоу: попробуем снова при следующем прогоне
+        print(f"WARNING: ошибок у проектов: {errors}. Повторим при следующем запуске.")
     print(f"Проверено проектов: {len(projects)}, уведомлений: {len(messages)}")
-    return 1 if errors else 0
+    return 0
 
 
 if __name__ == "__main__":
